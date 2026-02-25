@@ -2,7 +2,8 @@ import SwiftUI
 
 struct MainTabView: View {
     @StateObject private var skyModel = SkySceneViewModel(seed: 12345)
-
+    @AppStorage("isDarkTheme") private var isDarkTheme: Bool = true
+    
     var body: some View {
         TabView {
             NavigationStack {
@@ -25,10 +26,14 @@ struct MainTabView: View {
             .tabItem {
                 Label("Friends", systemImage: "person.2")
             }
+            
+            NavigationStack {
+                SettingsView()
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gearshape")
+            }
         }
+        .preferredColorScheme(isDarkTheme ? .dark : .light)
     }
-}
-
-#Preview {
-    MainTabView()
 }

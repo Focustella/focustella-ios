@@ -39,10 +39,15 @@ struct SkyView: View {
     let showsTitle: Bool
     let showsTwinkle: Bool
     let isInteractive: Bool
+    
+    // 💡 변경: 파라미터로 받지 않고, 저장소에서 직접 값을 읽어옵니다.
+    @AppStorage("isDarkTheme") private var isDarkTheme: Bool = true
+    
     @StateObject private var motion = MotionManager.shared
     private var stars: [StarObject] { model.ambientStars }
     private var constellations: [Constellation] { model.constellations }
 
+    // init에서 isDarkTheme 파라미터 삭제!
     init(
         model: SkySceneViewModel,
         showsTitle: Bool = true,
@@ -56,18 +61,25 @@ struct SkyView: View {
     }
 
     var body: some View {
+        // ... (body 내부는 아까와 동일하게 isDarkTheme ? .dark : .light 를 사용하는 코드 그대로 유지) ...
+        // 만약 body 코드가 지워졌다면 바로 말씀해주세요!
         GeometryReader { proxy in
             let viewSize = proxy.size
             let squareSide = min(viewSize.width, viewSize.height)
             let maxRadius = squareSide * 1.4
+            
             ZStack {
+                // 1. 기본 배경 레이어 (다크 테마면 어둡게 눌러줌)
                 NebulaBackground(size: viewSize, maxRadius: maxRadius)
+                    .colorMultiply(isDarkTheme ? Color(white: 0.2) : .white)
 
                 let canvasSize = CGSize(width: squareSide * 6.0, height: squareSide * 6.0)
                 let baseOffset = CGSize(
                     width: (viewSize.width - canvasSize.width) / 2,
                     height: (viewSize.height - canvasSize.height) / 2
                 )
+                
+                // 2. 별 & 별자리 레이어
                 let content = skyCanvas(size: canvasSize)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .scaleEffect(model.zoomScale)
@@ -82,12 +94,15 @@ struct SkyView: View {
                     .animation(nil, value: motion.offset)
                     .ignoresSafeArea()
 
+                // 3. 덧씌우는 빛 효과 레이어 (다크 테마면 투명도를 낮추고 은은하게 변경)
                 NebulaBackground(size: viewSize, maxRadius: maxRadius)
-                    .blendMode(.plusLighter)
-                    .opacity(0.9)
+                    .blendMode(isDarkTheme ? .screen : .plusLighter)
+                    .opacity(isDarkTheme ? 0.3 : 0.9)
                     .allowsHitTesting(false)
                     .ignoresSafeArea()
             }
+            // 전체 배경색을 까맣게 깔아줘서 안정감 추가
+            .background(isDarkTheme ? Color.black : Color.clear)
             .ignoresSafeArea()
         }
         .background(
@@ -106,9 +121,12 @@ struct SkyView: View {
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
         .modifier(TitleModifier(showsTitle: showsTitle))
+        // 다크 테마일 경우 기본 글씨/UI 색상을 흰색으로 강제
+        .environment(\.colorScheme, isDarkTheme ? .dark : .light)
     }
 }
 
+// 프리뷰에서 다크 테마 확인해보기
 #Preview {
     SkyView(model: SkySceneViewModel(seed: 1))
 }
