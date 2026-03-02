@@ -5,8 +5,8 @@ import CoreMotion
 
 @MainActor
 final class SkySceneViewModel: ObservableObject {
-    @Published var zoomScale: CGFloat = 1.0
-    @Published var zoomAnchor: CGFloat = 1.0
+    @Published var zoomScale: CGFloat = 0.72
+    @Published var zoomAnchor: CGFloat = 0.72
     @Published var panOffset: CGSize = .zero
     @Published var lastPanTranslation: CGSize = .zero
     @Published var isInteracting: Bool = false
@@ -69,9 +69,16 @@ struct SkyView: View {
             let maxRadius = squareSide * 1.4
             
             ZStack {
-                // 1. 기본 배경 레이어 (다크 테마면 어둡게 눌러줌)
+                Color.black
+                    .ignoresSafeArea()
+
+                // 1. Hard-guaranteed nebula layer rendered directly in SkyView.
+                directNebulaLayer(size: viewSize, maxRadius: maxRadius)
+                    .ignoresSafeArea()
+
+                // 2. Existing background layer (kept for richer texture).
                 NebulaBackground(size: viewSize, maxRadius: maxRadius)
-                    .colorMultiply(isDarkTheme ? Color(white: 0.2) : .white)
+                    .opacity(isDarkTheme ? 0.8 : 0.9)
 
                 let canvasSize = CGSize(width: squareSide * 6.0, height: squareSide * 6.0)
                 let baseOffset = CGSize(
@@ -79,7 +86,7 @@ struct SkyView: View {
                     height: (viewSize.height - canvasSize.height) / 2
                 )
                 
-                // 2. 별 & 별자리 레이어
+                // 3. 별 & 별자리 레이어
                 let content = skyCanvas(size: canvasSize)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .scaleEffect(model.zoomScale)
@@ -93,16 +100,7 @@ struct SkyView: View {
                     .animation(nil, value: model.zoomScale)
                     .animation(nil, value: motion.offset)
                     .ignoresSafeArea()
-
-                // 3. 덧씌우는 빛 효과 레이어 (다크 테마면 투명도를 낮추고 은은하게 변경)
-                NebulaBackground(size: viewSize, maxRadius: maxRadius)
-                    .blendMode(isDarkTheme ? .screen : .plusLighter)
-                    .opacity(isDarkTheme ? 0.3 : 0.9)
-                    .allowsHitTesting(false)
-                    .ignoresSafeArea()
             }
-            // 전체 배경색을 까맣게 깔아줘서 안정감 추가
-            .background(isDarkTheme ? Color.black : Color.clear)
             .ignoresSafeArea()
         }
         .background(
@@ -144,6 +142,33 @@ private struct TitleModifier: ViewModifier {
 }
 
 private extension SkyView {
+    @ViewBuilder
+    func directNebulaLayer(size: CGSize, maxRadius: CGFloat) -> some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.06, green: 0.1, blue: 0.22).opacity(0.42),
+                    Color(red: 0.03, green: 0.05, blue: 0.14).opacity(0.34),
+                    Color.black.opacity(0.36)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            Circle()
+                .fill(Color(red: 0.24, green: 0.38, blue: 0.72).opacity(0.24))
+                .frame(width: maxRadius * 1.8, height: maxRadius * 1.8)
+                .position(x: size.width * 0.18, y: size.height * 0.2)
+                .blur(radius: 60)
+
+            Circle()
+                .fill(Color(red: 0.38, green: 0.28, blue: 0.68).opacity(0.16))
+                .frame(width: maxRadius * 1.6, height: maxRadius * 1.6)
+                .position(x: size.width * 0.82, y: size.height * 0.8)
+                .blur(radius: 70)
+        }
+    }
+
     @ViewBuilder
     func skyCanvas(size: CGSize) -> some View {
         let base = ZStack {
@@ -235,6 +260,10 @@ final class MotionManager: ObservableObject {
     private let maxOffset: CGFloat = 18
 
     func start() {
+        if ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] != nil {
+            offset = .zero
+            return
+        }
         guard manager.isDeviceMotionAvailable else { return }
         manager.deviceMotionUpdateInterval = 1.0 / 30.0
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in

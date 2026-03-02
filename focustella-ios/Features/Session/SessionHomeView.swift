@@ -5,8 +5,13 @@ struct SessionHomeView: View {
 
     var body: some View {
         ZStack {
-            SkyView(model: skyModel, showsTitle: false, showsTwinkle: true, isInteractive: false)
-                .ignoresSafeArea()
+            SkyView(
+                model: skyModel,
+                showsTitle: false,
+                showsTwinkle: true,
+                isInteractive: false
+            )
+            .ignoresSafeArea()
 
             VStack(spacing: 12) {
                 NavigationLink {
@@ -29,7 +34,7 @@ struct SessionHomeView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
-            .frame(maxHeight: .infinity, alignment: .bottom)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Color.clear.frame(height: 52)

@@ -26,8 +26,8 @@ struct SeededRNG: RandomNumberGenerator {
 
 struct SkyGenerator {
     struct Config {
-        var starCount: Int = 40
-        var constellationCount: Int = 3
+        var starCount: Int = 64
+        var constellationCount: Int = 5
         var centerBiasSigma: CGFloat = 0.18
         var minStarDistance: CGFloat = 0.03
     }
@@ -196,4 +196,3 @@ struct ConstellationTemplate {
         )
     ]
 }
-
