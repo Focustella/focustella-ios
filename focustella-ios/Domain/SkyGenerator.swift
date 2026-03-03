@@ -27,7 +27,7 @@ struct SeededRNG: RandomNumberGenerator {
 struct SkyGenerator {
     struct Config {
         var starCount: Int = 64
-        var constellationCount: Int = 5
+        // var constellationCount: Int = 5  // <- 💡 삭제 또는 주석 처리: 더 이상 고정된 개수를 사용하지 않습니다.
         var centerBiasSigma: CGFloat = 0.18
         var minStarDistance: CGFloat = 0.03
     }
@@ -38,9 +38,11 @@ struct SkyGenerator {
         self.config = config
     }
 
-    mutating func generate(seed: UInt64) -> SkySceneData {
+    // 💡 변경: recordCount 파라미터를 추가로 받습니다.
+    mutating func generate(seed: UInt64, recordCount: Int) -> SkySceneData {
         var rng = SeededRNG(seed: seed)
-        let constellations = generateConstellations(rng: &rng)
+        // 💡 변경: recordCount를 전달합니다.
+        let constellations = generateConstellations(rng: &rng, count: recordCount)
         let stars = generateAmbientStars(rng: &rng)
         return SkySceneData(stars: stars, constellations: constellations)
     }
@@ -58,39 +60,41 @@ struct SkyGenerator {
         return stars
     }
 
-    private mutating func generateConstellations(rng: inout SeededRNG) -> [Constellation] {
-        let templates = ConstellationTemplate.samples
-        var result: [Constellation] = []
-        var allSegments: [(CGPoint, CGPoint)] = []
+    // 💡 변경: count 파라미터를 받아 해당 개수만큼 루프를 돕니다.
+        private mutating func generateConstellations(rng: inout SeededRNG, count: Int) -> [Constellation] {
+            let templates = ConstellationTemplate.samples
+            var result: [Constellation] = []
+            var allSegments: [(CGPoint, CGPoint)] = []
 
-        for index in 0..<config.constellationCount {
-            var placed = false
-            var attempts = 0
-            while !placed && attempts < 60 {
-                attempts += 1
-                let template = templates[index % templates.count]
-                let anchor = randomNearCenter(rng: &rng)
-                let angle = CGFloat(rng.nextDouble() * 2 * Double.pi)
-                let scale = CGFloat(0.08 + rng.nextDouble() * 0.06)
+            // 💡 변경: config.constellationCount 대신 count 사용
+            for index in 0..<count {
+                var placed = false
+                var attempts = 0
+                while !placed && attempts < 60 {
+                    attempts += 1
+                    let template = templates[index % templates.count]
+                    let anchor = randomNearCenter(rng: &rng)
+                    let angle = CGFloat(rng.nextDouble() * 2 * Double.pi)
+                    let scale = CGFloat(0.08 + rng.nextDouble() * 0.06)
 
-                let stars = template.points.map { pt in
-                    let rotated = rotate(pt, angle: angle)
-                    let shifted = CGPoint(x: anchor.x + rotated.x * scale, y: anchor.y + rotated.y * scale)
-                    return StarObject(position: clamp01(shifted), color: .paleBlue)
-                }
+                    let stars = template.points.map { pt in
+                        let rotated = rotate(pt, angle: angle)
+                        let shifted = CGPoint(x: anchor.x + rotated.x * scale, y: anchor.y + rotated.y * scale)
+                        return StarObject(position: clamp01(shifted), color: .paleBlue)
+                    }
 
-                let edges = template.edges.map { ConstellationEdge(fromID: stars[$0.0].id, toID: stars[$0.1].id) }
-                let constellation = Constellation(name: "Constellation-\(index + 1)", anchor: anchor, stars: stars, edges: edges)
+                    let edges = template.edges.map { ConstellationEdge(fromID: stars[$0.0].id, toID: stars[$0.1].id) }
+                    // 💡 이름을 동적으로 부여해볼 수 있습니다 (선택 사항)
+                    let constellation = Constellation(name: "Session-\(index + 1)", anchor: anchor, stars: stars, edges: edges)
 
-                let segments = segmentsFor(constellation: constellation)
-                if !intersectsExisting(segments: segments, with: allSegments) {
-                    allSegments.append(contentsOf: segments)
-                    result.append(constellation)
-                    placed = true
+                    let segments = segmentsFor(constellation: constellation)
+                    if !intersectsExisting(segments: segments, with: allSegments) {
+                        allSegments.append(contentsOf: segments)
+                        result.append(constellation)
+                        placed = true
+                    }
                 }
             }
-        }
-
         return result
     }
 

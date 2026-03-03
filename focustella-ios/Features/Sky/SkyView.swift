@@ -1,3 +1,4 @@
+// 💡 SkySceneViewModel 클래스 전체 수정 (처음 보여주신 코드 기준)
 import SwiftUI
 import CoreGraphics
 import Combine
@@ -15,9 +16,33 @@ final class SkySceneViewModel: ObservableObject {
     @Published var constellations: [Constellation] = []
     @Published var renderSize: CGSize?
 
+    private let seed: UInt64
+    private var cancellables = Set<AnyCancellable>() // Combine 구독 저장소
+    private let sessionStore = SessionStore.shared   // 공유 스토어 참조
+
+    // 💡 변경: init에서 하늘을 한 번 그리고, 이후 Store의 변화를 감지하도록 설정합니다.
     init(seed: UInt64) {
+        self.seed = seed
+        
+        // 초기화 시점에 현재 기록 개수로 하늘 그리기
+        regenerateSky(recordCount: sessionStore.dailyRecords.count)
+        
+        // 💡 Combine: SessionStore의 dailyRecords 배열이 변경될 때마다 하늘 다시 그리기
+        sessionStore.$dailyRecords
+            .receive(on: RunLoop.main) // 메인 스레드에서 실행 보장
+            .sink { [weak self] records in
+                guard let self = self else { return }
+                // 기록 개수가 바뀌면 하늘 재생성
+                self.regenerateSky(recordCount: records.count)
+            }
+            .store(in: &cancellables)
+    }
+
+    // 💡 추가: 하늘을 생성/재생성하는 헬퍼 메서드
+    private func regenerateSky(recordCount: Int) {
         var generator = SkyGenerator()
-        let data = generator.generate(seed: seed)
+        // 변경된 generator를 사용하여 기록 개수만큼 별자리 생성
+        let data = generator.generate(seed: seed, recordCount: recordCount)
         self.ambientStars = data.stars
         self.constellations = data.constellations
     }
