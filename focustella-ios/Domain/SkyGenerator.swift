@@ -26,8 +26,8 @@ struct SeededRNG: RandomNumberGenerator {
 
 struct SkyGenerator {
     struct Config {
-        var starCount: Int = 40
-        var constellationCount: Int = 3
+        var starCount: Int = 64
+        var constellationCount: Int = 5
         var centerBiasSigma: CGFloat = 0.18
         var minStarDistance: CGFloat = 0.03
     }
@@ -52,7 +52,7 @@ struct SkyGenerator {
             attempts += 1
             let p = randomNearCenter(rng: &rng)
             if stars.allSatisfy({ distance($0.position, p) > config.minStarDistance }) {
-                stars.append(StarObject(position: p, color: .warmYellow))
+                stars.append(StarObject(position: p, color: randomStarColor(rng: &rng)))
             }
         }
         return stars
@@ -76,7 +76,7 @@ struct SkyGenerator {
                 let stars = template.points.map { pt in
                     let rotated = rotate(pt, angle: angle)
                     let shifted = CGPoint(x: anchor.x + rotated.x * scale, y: anchor.y + rotated.y * scale)
-                    return StarObject(position: clamp01(shifted), color: .paleBlue)
+                    return StarObject(position: clamp01(shifted), color: randomStarColor(rng: &rng))
                 }
 
                 let edges = template.edges.map { ConstellationEdge(fromID: stars[$0.0].id, toID: stars[$0.1].id) }
@@ -157,6 +157,12 @@ struct SkyGenerator {
     private func direction(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
         (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
     }
+
+    private func randomStarColor(rng: inout SeededRNG) -> StarColor {
+        let palette: [StarColor] = [.warmYellow, .paleBlue, .nebulaPurple, .emberRed, .aquaCyan]
+        let index = Int(rng.next() % UInt64(palette.count))
+        return palette[index]
+    }
 }
 
 struct ConstellationTemplate {
@@ -196,4 +202,3 @@ struct ConstellationTemplate {
         )
     ]
 }
-

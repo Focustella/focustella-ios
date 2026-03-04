@@ -16,4 +16,7 @@ struct StarObject: Identifiable, Hashable {
 enum StarColor: String, Hashable {
     case warmYellow
     case paleBlue
+    case nebulaPurple
+    case emberRed
+    case aquaCyan
 }

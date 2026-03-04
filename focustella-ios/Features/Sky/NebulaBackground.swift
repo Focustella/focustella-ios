@@ -6,117 +6,61 @@ struct NebulaBackground: View {
 
     var body: some View {
         ZStack {
-            Rectangle()
-                .fill(Color.white.opacity(0.12))
-
             LinearGradient(
                 colors: [
-                    Color.white,
-                    Color.white,
-                    Color.white
+                    Color(red: 0.07, green: 0.12, blue: 0.24),
+                    Color(red: 0.04, green: 0.07, blue: 0.17),
+                    Color(red: 0.02, green: 0.03, blue: 0.1)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
 
-            #if DEBUG
-            Text("DEBUG WHITE BG")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(Color.red)
-                .padding(12)
-                .background(Color.white.opacity(0.4))
-                .cornerRadius(10)
-                .position(x: 120, y: 80)
-            #endif
+            Circle()
+                .fill(Color(red: 0.33, green: 0.54, blue: 1.0).opacity(0.36))
+                .frame(width: maxRadius * 2.0, height: maxRadius * 2.0)
+                .position(x: size.width * 0.2, y: size.height * 0.2)
+                .blur(radius: 70)
 
-            nebulaBlob(
-                colors: [
-                    Color.white.opacity(0.85),
-                    Color.white.opacity(0.55),
-                    .clear
-                ],
-                center: CGPoint(x: size.width * 0.18, y: size.height * 0.15),
-                radius: maxRadius * 1.05,
-                blur: 100
-            )
+            Circle()
+                .fill(Color(red: 0.45, green: 0.86, blue: 0.95).opacity(0.28))
+                .frame(width: maxRadius * 1.8, height: maxRadius * 1.8)
+                .position(x: size.width * 0.82, y: size.height * 0.24)
+                .blur(radius: 80)
 
-            nebulaBlob(
-                colors: [
-                    Color.white.opacity(0.75),
-                    Color.white.opacity(0.45),
-                    .clear
-                ],
-                center: CGPoint(x: size.width * 0.72, y: size.height * 0.28),
-                radius: maxRadius * 0.95,
-                blur: 110
-            )
+            Circle()
+                .fill(Color(red: 0.76, green: 0.55, blue: 1.0).opacity(0.22))
+                .frame(width: maxRadius * 1.7, height: maxRadius * 1.7)
+                .position(x: size.width * 0.76, y: size.height * 0.78)
+                .blur(radius: 92)
 
-            nebulaBlob(
-                colors: [
-                    Color.white.opacity(0.70),
-                    Color.white.opacity(0.40),
-                    .clear
-                ],
-                center: CGPoint(x: size.width * 0.40, y: size.height * 0.82),
-                radius: maxRadius * 0.85,
-                blur: 120
-            )
-
-            nebulaBlob(
-                colors: [
-                    Color.white.opacity(0.65),
-                    Color.white.opacity(0.35),
-                    .clear
-                ],
-                center: CGPoint(x: size.width * 0.85, y: size.height * 0.82),
-                radius: maxRadius * 0.75,
-                blur: 120
-            )
-
-            nebulaBlob(
-                colors: [
-                    Color.white.opacity(0.35),
-                    .clear
-                ],
-                center: CGPoint(x: size.width * 0.55, y: size.height * 0.55),
-                radius: maxRadius * 1.4,
-                blur: 140
-            )
+            Circle()
+                .fill(Color(red: 0.42, green: 0.58, blue: 0.96).opacity(0.22))
+                .frame(width: maxRadius * 1.7, height: maxRadius * 1.7)
+                .position(x: size.width * 0.24, y: size.height * 0.78)
+                .blur(radius: 92)
 
             LinearGradient(
                 colors: [
+                    Color(red: 0.45, green: 0.66, blue: 1.0, opacity: 0.12),
                     .clear,
-                    Color.black.opacity(0.35)
+                    Color(red: 0.66, green: 0.46, blue: 0.96, opacity: 0.12)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .blendMode(.multiply)
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.12),
+                    .clear,
+                    Color.black.opacity(0.22)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
-        .compositingGroup()
         .frame(width: size.width, height: size.height)
         .ignoresSafeArea()
-    }
-
-    private func nebulaBlob(
-        colors: [Color],
-        center: CGPoint,
-        radius: CGFloat,
-        blur: CGFloat
-    ) -> some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: colors,
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: radius
-                )
-            )
-            .frame(width: radius * 2, height: radius * 2)
-            .position(center)
-            .blur(radius: blur)
-            .blendMode(.plusLighter)
-            .opacity(0.85)
     }
 }

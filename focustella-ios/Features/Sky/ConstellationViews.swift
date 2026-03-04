@@ -27,7 +27,8 @@ struct ConstellationView: View {
                     size: 13,
                     phaseOffset: Double(star.position.x * 30 + star.position.y * 15),
                     color: .paleBlue,
-                    timeOverride: timeOverride
+                    timeOverride: timeOverride,
+                    animatesColor: false
                 )
                 .shadow(color: StarColor.paleBlue.glow(opacity: 0.9), radius: 6)
                 .allowsHitTesting(false)
