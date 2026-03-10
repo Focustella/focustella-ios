@@ -33,7 +33,7 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                FriendsView()
+                FriendsView(skyModel: skyModel)
             }
             .tag(Tab.friends)
             .tabItem {
