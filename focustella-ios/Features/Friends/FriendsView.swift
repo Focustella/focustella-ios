@@ -2,22 +2,16 @@ import SwiftUI
 
 struct FriendsView: View {
     @StateObject private var viewModel = FriendsViewModel()
-    // 1. SessionHomeView처럼 외부에서 동일한 skyModel을 주입받도록 변경합니다.
-    @ObservedObject var skyModel: SkySceneViewModel
+    @StateObject private var skyModel = SkySceneViewModel(seed: 1234)
     
     var body: some View {
         NavigationStack {
             ZStack {
-                // 별자리 배경 깔기 (SessionHomeView와 완전히 동일하게 설정)
-                SkyView(
-                    model: skyModel,
-                    showsTitle: false,
-                    showsTwinkle: true,
-                    isInteractive: false
-                )
-                .ignoresSafeArea()
+                // 1. 별자리 배경 깔기
+                SkyView(model: skyModel, showsTitle: false, showsTwinkle: true, isInteractive: false)
+                    .ignoresSafeArea()
                 
-                // 친구 목록 레이어
+                // 2. 친구 목록 레이어
                 List {
                     // 친구 추가 섹션
                     Section {
@@ -32,8 +26,10 @@ struct FriendsView: View {
                             .disabled(viewModel.newFriendID.isEmpty)
                         }
                     } header: {
+                        // 하얀색 대신 기본 보조색(회색)으로 변경
                         Text("친구 추가").foregroundStyle(.secondary)
                     }
+                    // 리스트 셀 배경을 완전히 투명하게 하거나, 아주 옅은 흰색으로 설정
                     .listRowBackground(Color.clear)
                     
                     // 받은 친구 요청 섹션
@@ -42,7 +38,7 @@ struct FriendsView: View {
                             ForEach(viewModel.pendingRequests) { request in
                                 HStack {
                                     Text(request.senderName)
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(.primary) // 기본 텍스트 색상(검정)
                                     Spacer()
                                     Button("수락") {
                                         viewModel.respondToRequest(requestID: request.id, isAccepted: true)
@@ -72,7 +68,7 @@ struct FriendsView: View {
                             ForEach(viewModel.friends) { friend in
                                 HStack {
                                     Text(friend.name)
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(.primary) // 검정 글씨
                                     Spacer()
                                     Image(systemName: "chevron.right")
                                         .foregroundStyle(.secondary)
@@ -92,10 +88,7 @@ struct FriendsView: View {
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("Friends")
-            // 2. SessionHomeView와 동일하게 하단 여백을 추가하여 리스트가 탭바에 가리지 않게 합니다.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                Color.clear.frame(height: 52)
-            }
+            // .toolbarColorScheme(.dark, for: .navigationBar) <- 타이틀을 하얗게 만들던 주범 삭제!
             .onAppear {
                 viewModel.fetchFriends()
                 viewModel.fetchRequests()
@@ -105,6 +98,5 @@ struct FriendsView: View {
 }
 
 #Preview {
-    // Preview에서도 skyModel을 주입해 줍니다.
-    FriendsView(skyModel: SkySceneViewModel(seed: 1234))
+    FriendsView()
 }
