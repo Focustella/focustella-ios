@@ -2,13 +2,13 @@ import SwiftUI
 
 struct FriendsView: View {
     @StateObject private var viewModel = FriendsViewModel()
-    // 1. SessionHomeView처럼 외부에서 동일한 skyModel을 주입받도록 변경합니다.
+    // 1. 외부에서 skyModel을 주입받아 배경의 일관성을 유지합니다.
     @ObservedObject var skyModel: SkySceneViewModel
     
     var body: some View {
         NavigationStack {
             ZStack {
-                // 별자리 배경 깔기 (SessionHomeView와 완전히 동일하게 설정)
+                // 별자리 배경 (HEAD의 SkyView 유지)
                 SkyView(
                     model: skyModel,
                     showsTitle: false,
@@ -63,7 +63,7 @@ struct FriendsView: View {
                         .listRowBackground(Color.clear)
                     }
                     
-                    // 내 친구 목록 섹션
+                    // 내 친구 목록 섹션 (develop의 친구 수 표시 기능 합침)
                     Section {
                         if viewModel.friends.isEmpty {
                             Text("아직 추가된 친구가 없습니다.")
@@ -89,10 +89,10 @@ struct FriendsView: View {
                     }
                     .listRowBackground(Color.clear)
                 }
-                .scrollContentBackground(.hidden)
+                .scrollContentBackground(.hidden) // 리스트 배경 투명화
             }
             .navigationTitle("Friends")
-            // 2. SessionHomeView와 동일하게 하단 여백을 추가하여 리스트가 탭바에 가리지 않게 합니다.
+            // 하단 탭바 여백 확보 (HEAD 유지)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 Color.clear.frame(height: 52)
             }
@@ -105,6 +105,6 @@ struct FriendsView: View {
 }
 
 #Preview {
-    // Preview에서도 skyModel을 주입해 줍니다.
+    // Preview에서도 skyModel 주입
     FriendsView(skyModel: SkySceneViewModel(seed: 1234))
 }

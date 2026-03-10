@@ -17,6 +17,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		3E3E7E3E3E3E7E3E00000001 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		DE33A0A62F4C49740058600E /* focustella-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "focustella-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DE33A0C12F4C80000058600E /* focustella-iosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "focustella-iosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -55,6 +56,7 @@
 		DE33A09D2F4C49740058600E = {
 			isa = PBXGroup;
 			children = (
+				3E3E7E3E3E3E7E3E00000001 /* README.md */,
 				DE33A0A82F4C49740058600E /* focustella-ios */,
 				DE33A0C22F4C80000058600E /* focustella-iosTests */,
 				DE33A0A72F4C49740058600E /* Products */,
@@ -332,6 +334,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXCLUDED_SOURCE_FILE_NAMES = ".gitkeep";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Focustella;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
@@ -378,6 +381,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXCLUDED_SOURCE_FILE_NAMES = ".gitkeep";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Focustella;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
