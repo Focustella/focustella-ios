@@ -4,6 +4,7 @@ struct CompletionAnimation: View {
     let constellation: Constellation
     let reduceMotion: Bool
     let highPerformanceMode: Bool
+    let edgeRevealOrder: [Int]
     let onFinished: () -> Void
 
     @State private var sparklingIndices: Set<Int> = []
@@ -17,7 +18,8 @@ struct CompletionAnimation: View {
             edgeProgress: edgeProgress,
             reduceMotion: reduceMotion,
             highPerformanceMode: highPerformanceMode,
-            sparklingIndices: sparklingIndices
+            sparklingIndices: sparklingIndices,
+            edgeRevealOrder: edgeRevealOrder
         )
         .task {
             await runSequence()
@@ -30,6 +32,7 @@ struct CompletionAnimation: View {
                 edgeProgress = 1
             }
             try? await Task.sleep(for: .milliseconds(500))
+            Haptics.success()
             onFinished()
             return
         }
@@ -45,6 +48,7 @@ struct CompletionAnimation: View {
         }
 
         try? await Task.sleep(for: .milliseconds(850))
+        Haptics.success()
         onFinished()
     }
 

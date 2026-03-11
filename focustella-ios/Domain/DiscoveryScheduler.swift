@@ -16,17 +16,29 @@ struct DiscoveryScheduler {
         guard durationSeconds > 0 else { return totalStars }
 
         let clampedElapsed = min(max(elapsedActive, 0), TimeInterval(durationSeconds))
-        if totalStars == 1 {
-            return clampedElapsed > 0 ? 1 : 0
-        }
+        let normalized = clampedElapsed / TimeInterval(durationSeconds)
+        return min(totalStars, Int(floor(normalized * TimeInterval(totalStars))))
+    }
 
-        if clampedElapsed <= 0 {
+    func progressToNextStar(elapsedActive: TimeInterval, durationSeconds: Int, totalStars: Int) -> Double {
+        guard totalStars > 0, durationSeconds > 0 else { return 1 }
+        let intervalValue = interval(durationSeconds: durationSeconds, totalStars: totalStars)
+        guard intervalValue > 0 else { return 1 }
+
+        let clampedElapsed = min(max(elapsedActive, 0), TimeInterval(durationSeconds))
+        let discovered = discoveredStarCount(
+            elapsedActive: clampedElapsed,
+            durationSeconds: durationSeconds,
+            totalStars: totalStars
+        )
+        if discovered >= totalStars {
             return 1
         }
 
-        let normalized = clampedElapsed / TimeInterval(durationSeconds)
-        let discoveredBeyondFirst = Int(floor(normalized * TimeInterval(totalStars - 1)))
-        return min(totalStars, 1 + discoveredBeyondFirst)
+        let nextEventElapsed = TimeInterval(discovered + 1) * intervalValue
+        let previousEventElapsed = TimeInterval(discovered) * intervalValue
+        let segment = max(0.0001, nextEventElapsed - previousEventElapsed)
+        return min(1, max(0, (clampedElapsed - previousEventElapsed) / segment))
     }
 
     func syncDiscoveredStarCount(
@@ -34,11 +46,12 @@ struct DiscoveryScheduler {
         startedAt: Date,
         pausedAccumulated: TimeInterval,
         pausedAt: Date?,
+        elapsedOffset: TimeInterval = 0,
         durationSeconds: Int,
         totalStars: Int
     ) -> Int {
         let effectiveNow = pausedAt ?? now
-        let elapsed = effectiveNow.timeIntervalSince(startedAt) - pausedAccumulated
+        let elapsed = effectiveNow.timeIntervalSince(startedAt) - pausedAccumulated + elapsedOffset
         return discoveredStarCount(elapsedActive: elapsed, durationSeconds: durationSeconds, totalStars: totalStars)
     }
 }

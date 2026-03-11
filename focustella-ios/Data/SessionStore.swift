@@ -9,6 +9,7 @@ final class SessionStore: ObservableObject {
     private struct RuntimeState {
         var pausedAccumulated: TimeInterval
         var pausedAt: Date?
+        var elapsedOffset: TimeInterval
     }
 
     private var runtimeState: RuntimeState?
@@ -18,10 +19,10 @@ final class SessionStore: ObservableObject {
             startedAt: now,
             slotSeconds: slotSeconds,
             constellationId: constellationId,
-            discoveredStarCount: 1,
+            discoveredStarCount: 0,
             status: .running
         )
-        runtimeState = RuntimeState(pausedAccumulated: 0, pausedAt: nil)
+        runtimeState = RuntimeState(pausedAccumulated: 0, pausedAt: nil, elapsedOffset: 0)
     }
 
     func pause(now: Date = Date()) {
@@ -60,6 +61,7 @@ final class SessionStore: ObservableObject {
             startedAt: session.startedAt,
             pausedAccumulated: runtimeState.pausedAccumulated,
             pausedAt: runtimeState.pausedAt,
+            elapsedOffset: runtimeState.elapsedOffset,
             durationSeconds: session.slotSeconds,
             totalStars: totalStars
         )
@@ -84,7 +86,7 @@ final class SessionStore: ObservableObject {
     func activeElapsed(now: Date = Date()) -> TimeInterval {
         guard let session = currentSession, let runtimeState else { return 0 }
         let effectiveNow = runtimeState.pausedAt ?? now
-        return max(0, effectiveNow.timeIntervalSince(session.startedAt) - runtimeState.pausedAccumulated)
+        return max(0, effectiveNow.timeIntervalSince(session.startedAt) - runtimeState.pausedAccumulated + runtimeState.elapsedOffset)
     }
 
     func remainingSeconds(now: Date = Date()) -> Int {
@@ -101,6 +103,10 @@ final class SessionStore: ObservableObject {
         runtimeState?.pausedAt
     }
 
+    func currentStatus() -> SessionStatus? {
+        currentSession?.status
+    }
+
     func updateMemo(sessionId: UUID, memo: SessionMemo) {
         guard let index = completedSessions.firstIndex(where: { $0.id == sessionId }) else { return }
         completedSessions[index].memo = memo
@@ -111,23 +117,51 @@ final class SessionStore: ObservableObject {
     }
 
     @discardableResult
-    func advanceToNextStar(totalStars: Int, now: Date = Date()) -> (advanced: Bool, completed: FocusSession?) {
-        guard totalStars > 0, var session = currentSession else { return (false, nil) }
+    func advanceToNextStar(
+        totalStars: Int,
+        now: Date = Date(),
+        leadSeconds: TimeInterval = 5
+    ) -> (advanced: Bool, completed: FocusSession?) {
+        guard totalStars > 0, let session = currentSession else { return (false, nil) }
         guard session.status == .running || session.status == .paused else { return (false, nil) }
         guard session.discoveredStarCount < totalStars else { return (false, nil) }
+        guard var runtimeState else { return (false, nil) }
 
-        session.discoveredStarCount += 1
-        if session.discoveredStarCount >= totalStars {
-            session.discoveredStarCount = totalStars
-            session.status = .completed
-            session.endedAt = now
-            currentSession = nil
-            runtimeState = nil
-            completedSessions.insert(session, at: 0)
-            return (true, session)
-        }
+        let elapsedNow = activeElapsed(now: now)
+        let duration = TimeInterval(session.slotSeconds)
+        let interval = duration / TimeInterval(totalStars)
+        let nextEventElapsed = min(duration, TimeInterval(session.discoveredStarCount + 1) * interval)
+        let targetElapsed = max(elapsedNow, nextEventElapsed - max(0, leadSeconds))
+        let delta = max(0, targetElapsed - elapsedNow)
+
+        guard delta > 0 else { return (false, nil) }
+        runtimeState.elapsedOffset += delta
+        self.runtimeState = runtimeState
 
         currentSession = session
         return (true, nil)
+    }
+
+    @discardableResult
+    func advanceToFinalStar(
+        totalStars: Int,
+        now: Date = Date(),
+        leadSeconds: TimeInterval = 2
+    ) -> Bool {
+        guard totalStars > 0, let session = currentSession else { return false }
+        guard session.status == .running || session.status == .paused else { return false }
+        guard session.discoveredStarCount < totalStars else { return false }
+        guard var runtimeState else { return false }
+
+        let elapsedNow = activeElapsed(now: now)
+        let duration = TimeInterval(session.slotSeconds)
+        let targetElapsed = max(elapsedNow, max(0, duration - max(0, leadSeconds)))
+        let delta = max(0, targetElapsed - elapsedNow)
+
+        guard delta > 0 else { return false }
+        runtimeState.elapsedOffset += delta
+        self.runtimeState = runtimeState
+        currentSession = session
+        return true
     }
 }

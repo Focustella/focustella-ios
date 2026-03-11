@@ -8,6 +8,9 @@ struct ConstellationRenderer: View {
     let reduceMotion: Bool
     let highPerformanceMode: Bool
     var sparklingIndices: Set<Int> = []
+    var edgeRevealOrder: [Int]? = nil
+    var visibleEdgeIndices: Set<Int>? = nil
+    var edgeVisibilityOverrides: [Int: CGFloat]? = nil
 
     var body: some View {
         let shouldAnimate = highPerformanceMode && !reduceMotion
@@ -15,32 +18,52 @@ struct ConstellationRenderer: View {
             GeometryReader { proxy in
                 let size = proxy.size
                 let time = context.date.timeIntervalSinceReferenceDate
-                let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { ($0.id, CGPoint(x: $0.x * size.width, y: $0.y * size.height)) })
+                let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { ($0.id, worldPoint(fromNormalized: CGPoint(x: $0.x, y: $0.y), size: size)) })
                 let constellationBase = basePaletteForConstellation()
 
                 ZStack {
                     if showEdges {
-                        let edgeLimit = max(1, Int(CGFloat(constellation.edges.count) * max(0.001, min(1, edgeProgress))))
+                        let edgeCount = max(1, constellation.edges.count)
+                        let reveal = CGFloat(edgeCount) * max(0, min(1, edgeProgress))
                         let edgePulse = shouldAnimate ? (sin(time * 1.0) + 1) / 2 : 0.35
-                        let edgeOpacity = shouldAnimate ? (0.22 + 0.3 * edgePulse) : 0.3
-                        let edgeGlow = shouldAnimate ? (1.4 + CGFloat(edgePulse) * 1.8) : 1.4
+                        let edgeOpacity = shouldAnimate ? (0.15 + 0.14 * edgePulse) : 0.18
+                        let edgeGlow = shouldAnimate ? (1.7 + CGFloat(edgePulse) * 1.9) : 1.6
                         let edgeBaseColor = constellationBase.color
+                        let orderedIndices = edgeRevealOrder ?? Array(constellation.edges.indices)
 
-                        edgePath(pointsById: pointsById, limit: edgeLimit)
-                            .stroke(
-                                edgeBaseColor.opacity(edgeOpacity),
-                                style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
-                            )
-                            .shadow(
-                                color: edgeBaseColor.opacity(edgeOpacity * 0.7),
-                                radius: edgeGlow
-                            )
+                        ForEach(Array(orderedIndices.enumerated()), id: \.offset) { order, edgeIndex in
+                            let isVisible = visibleEdgeIndices?.contains(edgeIndex) ?? true
+                            if constellation.edges.indices.contains(edgeIndex), isVisible {
+                                let local = min(1, max(0, reveal - CGFloat(order)))
+                                if local > 0 {
+                                    let eased = local * local * (3 - 2 * local)
+                                    let visibility = edgeVisibilityOverrides?[edgeIndex] ?? 1
+                                    if visibility > 0 {
+                                        let edge = constellation.edges[edgeIndex]
+                                        if let from = pointsById[edge.from], let to = pointsById[edge.to] {
+                                            Path { path in
+                                                path.move(to: from)
+                                                path.addLine(to: to)
+                                            }
+                                            .stroke(
+                                                edgeBaseColor.opacity(edgeOpacity * eased * visibility),
+                                                style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
+                                            )
+                                            .shadow(
+                                                color: edgeBaseColor.opacity(edgeOpacity * eased * visibility * 0.85),
+                                                radius: edgeGlow * eased
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     ForEach(Array(constellation.stars.enumerated()), id: \.element.id) { index, star in
                         let discovered = index < discoveredStarCount
                         let sparkle = sparklingIndices.contains(index)
-                        let position = CGPoint(x: star.x * size.width, y: star.y * size.height)
+                        let position = worldPoint(fromNormalized: CGPoint(x: star.x, y: star.y), size: size)
                         let phaseOffset = Double(star.x * 30 + star.y * 15)
                         let palette = starPalette(for: index, base: constellationBase)
 
@@ -59,12 +82,6 @@ struct ConstellationRenderer: View {
                             )
                             .opacity(1.0)
                             .allowsHitTesting(false)
-                        } else {
-                            TwinkleStarShape(points: 4, innerRatio: 0.45)
-                                .fill(palette.color.opacity(0.42))
-                                .frame(width: 6, height: 6)
-                                .shadow(color: palette.color.opacity(0.18), radius: 1.0)
-                                .position(position)
                         }
                     }
                 }
@@ -73,15 +90,16 @@ struct ConstellationRenderer: View {
         .allowsHitTesting(false)
     }
 
-    private func edgePath(pointsById: [UUID: CGPoint], limit: Int) -> Path {
-        var path = Path()
-        for (index, edge) in constellation.edges.enumerated() {
-            if index >= limit { break }
-            guard let from = pointsById[edge.from], let to = pointsById[edge.to] else { continue }
-            path.move(to: from)
-            path.addLine(to: to)
-        }
-        return path
+    private func worldPoint(fromNormalized point: CGPoint, size: CGSize) -> CGPoint {
+        let side = min(size.width, size.height)
+        let origin = CGPoint(
+            x: (size.width - side) / 2,
+            y: (size.height - side) / 2
+        )
+        return CGPoint(
+            x: origin.x + point.x * side,
+            y: origin.y + point.y * side
+        )
     }
 
     private func starPalette(for index: Int, base: StarPalette) -> StarPalette {
