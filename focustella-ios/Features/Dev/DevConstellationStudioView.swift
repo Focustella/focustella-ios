@@ -64,7 +64,7 @@ struct DevConstellationStudioView: View {
                                 }
                         )
                     }
-                    .frame(height: 260)
+                    .frame(height: 320)
                 }
             }
 
@@ -109,7 +109,7 @@ struct DevConstellationStudioView: View {
 
         let edges = buildEdges(count: relativePoints.count, closeLoop: closeLoop)
         Task { @MainActor in
-            await repository.insertUserConstellation(
+            let insertedId = await repository.insertUserConstellation(
                 userId: mockUserId,
                 name: constellationName,
                 relativeStars: relativePoints,
@@ -117,8 +117,8 @@ struct DevConstellationStudioView: View {
                 visualStyle: .debugRed
             )
             isSaving = false
-            message = "삽입 완료: MySky로 돌아가면 로드됩니다."
-            NotificationCenter.default.post(name: .didInsertUserConstellation, object: nil)
+            message = "삽입 완료: MySky에 바로 반영됩니다."
+            NotificationCenter.default.post(name: .didInsertUserConstellation, object: insertedId)
         }
     }
 
@@ -135,16 +135,18 @@ struct DevConstellationStudioView: View {
     }
 
     private func toCanvas(_ point: CGPoint, size: CGSize) -> CGPoint {
-        CGPoint(
-            x: size.width * 0.5 + point.x * size.width,
-            y: size.height * 0.5 + point.y * size.height
+        let side = min(size.width, size.height)
+        return CGPoint(
+            x: size.width * 0.5 + point.x * side,
+            y: size.height * 0.5 + point.y * side
         )
     }
 
     private func toRelative(_ point: CGPoint, size: CGSize) -> CGPoint {
-        let x = (point.x - size.width * 0.5) / size.width
-        let y = (point.y - size.height * 0.5) / size.height
-        return CGPoint(x: min(max(x, -0.42), 0.42), y: min(max(y, -0.42), 0.42))
+        let side = max(1, min(size.width, size.height))
+        let x = (point.x - size.width * 0.5) / side
+        let y = (point.y - size.height * 0.5) / side
+        return CGPoint(x: min(max(x, -0.48), 0.48), y: min(max(y, -0.48), 0.48))
     }
 }
 
