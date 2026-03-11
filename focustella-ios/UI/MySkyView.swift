@@ -20,7 +20,7 @@ struct MySkyView: View {
     @State private var showCTA = true
     @State private var ctaTask: Task<Void, Never>?
     @State private var showSlotPicker = false
-    @State private var showDailySessionNotice = false
+    @State private var showDailySessionSheet = false
 
     @State private var selectedSession: FocusSession?
     @State private var completionConstellation: Constellation?
@@ -183,10 +183,8 @@ struct MySkyView: View {
                     requestStartSession(slotSeconds: seconds)
                 }
             }
-            .alert("일일 세션", isPresented: $showDailySessionNotice) {
-                Button("확인", role: .cancel) { }
-            } message: {
-                Text("일일 세션은 다음 단계에서 연결 예정입니다.")
+            .sheet(isPresented: $showDailySessionSheet) {
+                DailySessionView()
             }
             .sheet(isPresented: $showMemoSheet) {
                 MemoSheet { memo in
@@ -200,7 +198,7 @@ struct MySkyView: View {
             .overlay(alignment: .bottom) {
                 VStack(spacing: 10) {
                     Button {
-                        showDailySessionNotice = true
+                        showDailySessionSheet = true
                     } label: {
                         Text("오늘 하루 계획하기")
                             .font(.headline)

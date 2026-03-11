@@ -125,14 +125,14 @@ final class DailySessionViewModel: ObservableObject {
         !activeItems.isEmpty && activeItems.allSatisfy { $0.isCompleted }
     }
     
-    // MARK: - Server 통신 로직
     func completeDailySession() async {
-        guard let itemsData = try? JSONEncoder().encode(activeItems),
-              let checklistsString = String(data: itemsData, encoding: .utf8) else { return }
+        // 🗑️ 기존 String 인코딩 걷어내기
+        // guard let itemsData = try? JSONEncoder().encode(activeItems)... (삭제)
         
+        // 🔥 깔끔해진 페이로드 생성
         let payload = DailySessionSaveRequest(
             timestamp: Date().logicalDayStart.ISO8601Format(),
-            checklists: checklistsString
+            items: activeItems // 배열을 그대로 넘깁니다!
         )
         
         guard let url = URL(string: "http://localhost:8080/api/v1/session/daily") else { return }
@@ -142,16 +142,16 @@ final class DailySessionViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         do {
+            // Swift의 JSONEncoder가 payload 내부의 items 배열까지 한 번에 예쁜 JSON으로 만들어 줍니다.
             request.httpBody = try JSONEncoder().encode(payload)
-            let (_, response) = try await URLSession.shared.data(for: request)
             
+            let (_, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) {
                 print("✅ 서버 저장 성공!")
                 self.showCompletionAlert = true
                 self.clearActiveSession()
-            } else {
-                print("❌ 서버 에러: 상태 코드 \((response as? HTTPURLResponse)?.statusCode ?? -1)")
             }
+            // ... 에러 처리 생략
         } catch {
             print("❌ 요청 실패: \(error.localizedDescription)")
         }
@@ -169,6 +169,9 @@ final class DailySessionViewModel: ObservableObject {
         
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            if let jsonString = String(data: data, encoding: .utf8) {
+                    print("🌐 서버 응답 데이터: \(jsonString)")
+                }
             if let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) {
                 let decoded = try JSONDecoder().decode([FetchedDailySession].self, from: data)
                 self.fetchedSessions = decoded
