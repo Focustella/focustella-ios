@@ -21,7 +21,7 @@ struct SessionHistoryView: View {
                 } else {
                     List(viewModel.fetchedSessions) { session in
                         Section {
-                            ForEach(session.parsedItems) { item in
+                            ForEach(session.items) { item in
                                 HStack(spacing: 12) {
                                     Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                                         .font(.system(size: 16))
@@ -65,16 +65,18 @@ struct SessionHistoryView: View {
         .presentationDetents([.medium, .large])
     }
     
+    
     private func formatTimestamp(_ timestamp: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSS"
+        // 🔥 서버가 "Z"로 끝나는 ISO8601 표준 포맷을 보내주므로 전용 포매터 사용
+        let formatter = ISO8601DateFormatter()
         
         if let date = formatter.date(from: timestamp) {
             let displayFormatter = DateFormatter()
+            // 한국 시간에 맞게 예쁘게 출력
             displayFormatter.dateFormat = "yyyy년 M월 d일 HH:mm 완료"
             return displayFormatter.string(from: date)
         }
         
-        return timestamp.components(separatedBy: ".").first ?? timestamp
+        return timestamp
     }
 }
