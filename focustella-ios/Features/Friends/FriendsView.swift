@@ -2,18 +2,18 @@ import SwiftUI
 
 struct FriendsView: View {
     @StateObject private var viewModel = FriendsViewModel()
-    // 1. 외부에서 skyModel을 주입받아 배경의 일관성을 유지합니다.
-    @ObservedObject var skyModel: SkySceneViewModel
     
     var body: some View {
         NavigationStack {
             ZStack {
-                // 별자리 배경 (HEAD의 SkyView 유지)
-                SkyView(
-                    model: skyModel,
-                    showsTitle: false,
-                    showsTwinkle: true,
-                    isInteractive: false
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.05, green: 0.1, blue: 0.24),
+                        Color(red: 0.04, green: 0.06, blue: 0.16),
+                        Color(red: 0.02, green: 0.03, blue: 0.08)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
                 .ignoresSafeArea()
                 
@@ -105,6 +105,5 @@ struct FriendsView: View {
 }
 
 #Preview {
-    // Preview에서도 skyModel 주입
-    FriendsView(skyModel: SkySceneViewModel(seed: 1234))
+    FriendsView()
 }
