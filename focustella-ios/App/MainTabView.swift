@@ -8,7 +8,6 @@ struct MainTabView: View {
         case settings
     }
 
-    @AppStorage("isDarkTheme") private var isDarkTheme: Bool = true
     @AppStorage("developerMode") private var developerMode: Bool = false
 
     var body: some View {
@@ -48,6 +47,5 @@ struct MainTabView: View {
                 Label("Settings", systemImage: "gearshape")
             }
         }
-        .preferredColorScheme(isDarkTheme ? .dark : .light)
     }
 }
