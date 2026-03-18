@@ -11,6 +11,7 @@ struct ConstellationRenderer: View {
     var edgeRevealOrder: [Int]? = nil
     var visibleEdgeIndices: Set<Int>? = nil
     var edgeVisibilityOverrides: [Int: CGFloat]? = nil
+    var starStyle: StarAppearanceStyle = .realistic
 
     var body: some View {
         let shouldAnimate = highPerformanceMode && !reduceMotion
@@ -78,7 +79,8 @@ struct ConstellationRenderer: View {
                                 reduceMotion: reduceMotion,
                                 boost: sparkle,
                                 isAnimated: shouldAnimate,
-                                hasFlare: shouldAnimate && (sparkle || index.isMultiple(of: 6))
+                                hasFlare: shouldAnimate && (sparkle || index.isMultiple(of: 6)),
+                                currentStyle: starStyle
                             )
                             .opacity(1.0)
                             .allowsHitTesting(false)
@@ -136,6 +138,7 @@ private struct TwinklingStarNode: View {
     let boost: Bool
     let isAnimated: Bool
     let hasFlare: Bool
+    let currentStyle: StarAppearanceStyle
 
     var body: some View {
         let t = time + phaseOffset
@@ -163,7 +166,7 @@ private struct TwinklingStarNode: View {
                     color: glowColor.opacity(flareOpacity)
                 )
                 .rotationEffect(.degrees(0))
-
+                
                 StarFlare(
                     length: flareLength * 0.7,
                     thickness: max(0.3, size * 0.04),
@@ -171,40 +174,197 @@ private struct TwinklingStarNode: View {
                 )
                 .rotationEffect(.degrees(45))
             }
-
-            TwinkleStarShape(points: 4, innerRatio: 0.45)
-                .fill(color)
-                .frame(width: size, height: size)
+            starShapeView(size: size, color: color)
         }
         .shadow(color: glowColor, radius: glow)
         .opacity(opacity)
         .position(position)
     }
+    
+    @ViewBuilder
+        private func starShapeView(size: CGFloat, color: Color) -> some View {
+            let gradient = RadialGradient(colors: [.white, color], center: .center, startRadius: 0, endRadius: size / 2)
+            
+            switch currentStyle {
+            case .realistic:
+                Circle()
+                    .fill(RadialGradient(colors: [.white, color.opacity(0.8)], center: .center, startRadius: 0, endRadius: size / 2))
+                    .frame(width: size * 0.8, height: size * 0.8)
+                    .blur(radius: 1.0)
+            case .fourPoint:
+                FourPointStarShape()
+                    .fill(gradient)
+                    .frame(width: size, height: size)
+                    .rotationEffect(.degrees(-5))
+            case .fivePoint:
+                FivePointStarShape()
+                    .fill(gradient)
+                    .frame(width: size, height: size)
+            case .eightPoint:
+                EightPointStarShape()
+                    .fill(gradient)
+                    .frame(width: size, height: size)
+            }
+        }
+    
+    // 🔥 2. 4각 별 Shape
+    private struct FourPointStarShape: Shape {
+        var innerRatio: CGFloat = 0.35
+        func path(in rect: CGRect) -> Path {
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let w = rect.width / 2, h = rect.height / 2
+            let ix = w * innerRatio, iy = h * innerRatio
+            var p = Path()
+            p.move(to: CGPoint(x: center.x, y: center.y - h))
+            p.addQuadCurve(to: CGPoint(x: center.x + w, y: center.y), control: CGPoint(x: center.x + ix, y: center.y - iy))
+            p.addQuadCurve(to: CGPoint(x: center.x, y: center.y + h), control: CGPoint(x: center.x + ix, y: center.y + iy))
+            p.addQuadCurve(to: CGPoint(x: center.x - w, y: center.y), control: CGPoint(x: center.x - ix, y: center.y + iy))
+            p.addQuadCurve(to: CGPoint(x: center.x, y: center.y - h), control: CGPoint(x: center.x - ix, y: center.y - iy))
+            return p
+        }
+    }
+
+    // 🔥 3. 5각 별 Shape
+    private struct FivePointStarShape: Shape {
+        func path(in rect: CGRect) -> Path {
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let outerRadius = min(rect.width, rect.height) / 2
+            let innerRadius = outerRadius * 0.42
+            var p = Path()
+            for i in 0..<10 {
+                let radius = i.isMultiple(of: 2) ? outerRadius : innerRadius
+                let angle = (.pi * 2 / 10) * CGFloat(i) - .pi / 2
+                let pt = CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+                if i == 0 { p.move(to: pt) }
+                else {
+                    let cp = CGPoint(x: (p.currentPoint!.x + pt.x)/2, y: (p.currentPoint!.y + pt.y)/2)
+                    p.addQuadCurve(to: pt, control: cp)
+                }
+            }
+            p.closeSubpath()
+            return p
+        }
+    }
+
+    // 🔥 4. 8각 별 Shape
+    private struct EightPointStarShape: Shape {
+        func path(in rect: CGRect) -> Path {
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let outer = min(rect.width, rect.height) / 2
+            let inner = outer * 0.25
+            var p = Path()
+            for i in 0..<16 {
+                var r = inner
+                if i.isMultiple(of: 2) { r = i.isMultiple(of: 4) ? outer : outer * 0.6 }
+                let angle = (.pi * 2 / 16) * CGFloat(i) - .pi / 2
+                let pt = CGPoint(x: center.x + cos(angle) * r, y: center.y + sin(angle) * r)
+                if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+            }
+            p.closeSubpath()
+            return p
+        }
+    }
+
 }
+
 
 private struct StarPalette {
     let color: Color
     let rgb: (red: Double, green: Double, blue: Double)
 }
 
-private struct TwinkleStarShape: Shape {
-    let points: Int
-    let innerRatio: CGFloat
+//private struct TwinkleStarShape: Shape {
+//    let points: Int
+//    let innerRatio: CGFloat
+//
+//    func path(in rect: CGRect) -> Path {
+//        let center = CGPoint(x: rect.midX, y: rect.midY)
+//        let outerRadius = min(rect.width, rect.height) / 2
+//        let innerRadius = outerRadius * innerRatio
+//        let angleStep = .pi * 2 / CGFloat(points * 2)
+//
+//        var path = Path()
+//        for index in 0..<(points * 2) {
+//            let radius = index.isMultiple(of: 2) ? outerRadius : innerRadius
+//            let angle = angleStep * CGFloat(index) - .pi / 2
+//            let point = CGPoint(
+//                x: center.x + cos(angle) * radius,
+//                y: center.y + sin(angle) * radius
+//            )
+//            if index == 0 {
+//                path.move(to: point)
+//            } else {
+//                path.addLine(to: point)
+//            }
+//        }
+//        path.closeSubpath()
+//        return path
+//    }
+//}
 
+//// ✅ 새로운 부드러운 곡선형 별 Shape로 교체
+//private struct TwinkleStarShape: Shape {
+//    // 호환성을 위해 기존 프로퍼티 이름 유지
+//    let points: Int // 4점 별로 가정
+//    let innerRatio: CGFloat
+//
+//    func path(in rect: CGRect) -> Path {
+//        let center = CGPoint(x: rect.width / 2, y: rect.height / 2)
+//        let width = rect.width
+//        let height = rect.height
+//        
+//        let top = CGPoint(x: center.x, y: 0)
+//        let bottom = CGPoint(x: center.x, y: height)
+//        let left = CGPoint(x: 0, y: center.y)
+//        let right = CGPoint(x: width, y: center.y)
+//        
+//        // innerRatio를 사용하여 안쪽으로 오목하게 들어가는 깊이 조절
+//        let innerX = width * innerRatio / 2
+//        let innerY = height * innerRatio / 2
+//        
+//        let innerTopLeft = CGPoint(x: center.x - innerX, y: center.y - innerY)
+//        let innerTopRight = CGPoint(x: center.x + innerX, y: center.y - innerY)
+//        let innerBottomLeft = CGPoint(x: center.x - innerX, y: center.y + innerY)
+//        let innerBottomRight = CGPoint(x: center.x + innerX, y: center.y + innerY)
+//
+//        var path = Path()
+//        path.move(to: top)
+//        // 직선 대신 2차 베지어 곡선(QuadCurve)으로 부드럽게 깎아냄
+//        path.addQuadCurve(to: right, control: innerTopRight)
+//        path.addQuadCurve(to: bottom, control: innerBottomRight)
+//        path.addQuadCurve(to: left, control: innerBottomLeft)
+//        path.addQuadCurve(to: top, control: innerTopLeft)
+//        path.closeSubpath()
+//        
+//        return path
+//    }
+//}
+
+// 📂 ConstellationRenderer.swift 맨 하단 덮어쓰기
+
+private struct TwinkleStarShape: Shape {
     func path(in rect: CGRect) -> Path {
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let outerRadius = min(rect.width, rect.height) / 2
-        let innerRadius = outerRadius * innerRatio
+        let innerRadius = outerRadius * 0.25 // 아주 깊게 파서 뾰족하게
+        let points = 8
         let angleStep = .pi * 2 / CGFloat(points * 2)
 
         var path = Path()
         for index in 0..<(points * 2) {
-            let radius = index.isMultiple(of: 2) ? outerRadius : innerRadius
+            var radius: CGFloat = innerRadius
+            
+            if index.isMultiple(of: 2) {
+                // 짝수 인덱스(바깥쪽 점)일 때, 길이를 번갈아가며 다르게 설정
+                radius = index.isMultiple(of: 4) ? outerRadius : outerRadius * 0.6
+            }
+            
             let angle = angleStep * CGFloat(index) - .pi / 2
             let point = CGPoint(
                 x: center.x + cos(angle) * radius,
                 y: center.y + sin(angle) * radius
             )
+            
             if index == 0 {
                 path.move(to: point)
             } else {

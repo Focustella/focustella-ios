@@ -1,15 +1,14 @@
 import Foundation
 
 extension Date {
-    /// 06시를 기준으로 논리적인 '오늘'의 시작 시간을 반환합니다.
-    var logicalDayStart: Date {
+    /// 06시를 기준으로 논리적인 날짜를 반환합니다. (예: 16일 새벽 2시 -> "2026-03-15")
+    var logicalDateString: String {
         let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day, .hour], from: self)
+        let hour = calendar.component(.hour, from: self)
+        let logicalDate = hour < 6 ? calendar.date(byAdding: .day, value: -1, to: self)! : self
         
-        if let hour = components.hour, hour < 6 {
-            return calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: self))!.addingTimeInterval(6 * 3600)
-        } else {
-            return calendar.startOfDay(for: self).addingTimeInterval(6 * 3600)
-        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: logicalDate)
     }
 }
