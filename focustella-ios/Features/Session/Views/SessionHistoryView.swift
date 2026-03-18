@@ -21,7 +21,7 @@ struct SessionHistoryView: View {
                 } else {
                     List(viewModel.fetchedSessions) { session in
                         Section {
-                            // 🔥 수정: parsedItems 대신 checklists 사용
+                            // 🔥 수정: 모델에 맞춰 checklists 사용
                             ForEach(session.checklists) { item in
                                 HStack(spacing: 12) {
                                     Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
@@ -69,21 +69,21 @@ struct SessionHistoryView: View {
         .presentationDetents([.medium, .large])
     }
     
+    
     private func formatTimestamp(_ timestamp: String) -> String {
-        let formatter = DateFormatter()
-        // 서버에서 오는 ISO8601 포맷(yyyy-MM-dd'T'HH:mm:ss'Z')에 맞게 수정
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
-        // UTC 시간대로 올 경우 로컬 타임존으로 변환
-        formatter.timeZone = TimeZone(abbreviation: "UTC")
+        // 🔥 서버가 "Z"로 끝나는 ISO8601 표준 포맷을 보내주므로 전용 포매터 사용
+        let formatter = ISO8601DateFormatter()
         
         if let date = formatter.date(from: timestamp) {
             let displayFormatter = DateFormatter()
+            // 한국 시간에 맞게 예쁘게 출력
             displayFormatter.dateFormat = "yyyy년 M월 d일 HH:mm 완료"
             // 기기의 로컬 타임존으로 표시
             displayFormatter.timeZone = TimeZone.current
             return displayFormatter.string(from: date)
         }
         
+        // 파싱 실패 시 T를 기준으로 날짜만이라도 보여주는 안전장치
         return timestamp.components(separatedBy: "T").first ?? timestamp
     }
 }

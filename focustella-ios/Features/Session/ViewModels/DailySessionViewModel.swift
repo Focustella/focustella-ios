@@ -155,9 +155,10 @@ final class DailySessionViewModel: ObservableObject {
     
     // MARK: - Server 통신 로직
     func completeDailySession(isAuto: Bool = false) async {
+        // 🔥 깔끔해진 페이로드 생성 (items가 아닌 checklists 사용)
         let payload = DailySessionSaveRequest(
             timestamp: Date().ISO8601Format(), // 전송 시점의 정확한 시간
-            checklists: activeItems
+            checklists: activeItems // 배열을 그대로 넘깁니다!
         )
         
         guard let url = URL(string: "\(baseURL)/session/daily") else { return }
@@ -169,8 +170,8 @@ final class DailySessionViewModel: ObservableObject {
         
         do {
             request.httpBody = try JSONEncoder().encode(payload)
-            let (_, response) = try await URLSession.shared.data(for: request)
             
+            let (_, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) {
                 print("✅ 서버 저장 성공! (URL: \(url.absoluteString))")
                 
@@ -204,6 +205,9 @@ final class DailySessionViewModel: ObservableObject {
         
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("🌐 서버 응답 데이터: \(jsonString)")
+            }
             if let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) {
                 let decoded = try JSONDecoder().decode([FetchedDailySession].self, from: data)
                 await MainActor.run { self.fetchedSessions = decoded }
