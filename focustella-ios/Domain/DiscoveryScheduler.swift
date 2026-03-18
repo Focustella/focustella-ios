@@ -46,12 +46,17 @@ struct DiscoveryScheduler {
         startedAt: Date,
         pausedAccumulated: TimeInterval,
         pausedAt: Date?,
-        elapsedOffset: TimeInterval = 0,
+        elapsedOffset: TimeInterval, // 🔥 타임워프 파라미터 융합
         durationSeconds: Int,
         totalStars: Int
     ) -> Int {
+        guard totalStars > 0 else { return 0 }
+        
         let effectiveNow = pausedAt ?? now
-        let elapsed = effectiveNow.timeIntervalSince(startedAt) - pausedAccumulated + elapsedOffset
+        // 🔥 진짜 시간 + 타임워프로 당긴 시간(elapsedOffset) 합산
+        let elapsed = max(0, effectiveNow.timeIntervalSince(startedAt) - pausedAccumulated + elapsedOffset)
+        
+        // HEAD에 있던 안전한 계산 함수를 재활용합니다.
         return discoveredStarCount(elapsedActive: elapsed, durationSeconds: durationSeconds, totalStars: totalStars)
     }
 }

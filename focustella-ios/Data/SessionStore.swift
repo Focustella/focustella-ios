@@ -6,6 +6,7 @@ final class SessionStore: ObservableObject {
     @Published private(set) var completedSessions: [FocusSession] = []
     @Published private(set) var currentSession: FocusSession?
 
+    // 1. 🔥 날아갔던 elapsedOffset 복구
     private struct RuntimeState {
         var pausedAccumulated: TimeInterval
         var pausedAt: Date?
@@ -19,9 +20,10 @@ final class SessionStore: ObservableObject {
             startedAt: now,
             slotSeconds: slotSeconds,
             constellationId: constellationId,
-            discoveredStarCount: 0,
+            discoveredStarCount: 0, // 🔥 1에서 0으로 수정 (시작할 때 별은 0개부터)
             status: .running
         )
+        // 🔥 초기화에 elapsedOffset 추가
         runtimeState = RuntimeState(pausedAccumulated: 0, pausedAt: nil, elapsedOffset: 0)
     }
 
@@ -56,12 +58,13 @@ final class SessionStore: ObservableObject {
         guard let runtimeState else { return (false, nil) }
 
         let previousCount = session.discoveredStarCount
+        
         let syncedCount = scheduler.syncDiscoveredStarCount(
             now: now,
             startedAt: session.startedAt,
             pausedAccumulated: runtimeState.pausedAccumulated,
             pausedAt: runtimeState.pausedAt,
-            elapsedOffset: runtimeState.elapsedOffset,
+            elapsedOffset: runtimeState.elapsedOffset, // 🔥 날아갔던 파라미터 복구
             durationSeconds: session.slotSeconds,
             totalStars: totalStars
         )
@@ -83,6 +86,7 @@ final class SessionStore: ObservableObject {
         return (session.discoveredStarCount > previousCount, nil)
     }
 
+    // 2. 🔥 activeElapsed에 elapsedOffset 더하는 로직 복구
     func activeElapsed(now: Date = Date()) -> TimeInterval {
         guard let session = currentSession, let runtimeState else { return 0 }
         let effectiveNow = runtimeState.pausedAt ?? now
@@ -116,6 +120,7 @@ final class SessionStore: ObservableObject {
         completedSessions.first { $0.constellationId == constellationId }
     }
 
+    // 3. 🔥 advanceToNextStar 옛날 방식(숫자만 +1)에서 시간 타임워프 방식으로 복구
     @discardableResult
     func advanceToNextStar(
         totalStars: Int,
@@ -141,7 +146,7 @@ final class SessionStore: ObservableObject {
         currentSession = session
         return (true, nil)
     }
-
+    
     @discardableResult
     func advanceToFinalStar(
         totalStars: Int,
@@ -163,5 +168,13 @@ final class SessionStore: ObservableObject {
         self.runtimeState = runtimeState
         currentSession = session
         return true
+    }
+    
+    // MARK: - 튜토리얼용 타임워프 함수 (그대로 유지)
+    func fastForwardTutorial(by seconds: TimeInterval) {
+        guard var state = runtimeState, currentSession?.status == .running else { return }
+        state.elapsedOffset += seconds
+        self.runtimeState = state
+        self.objectWillChange.send() // UI 즉각 갱신
     }
 }
