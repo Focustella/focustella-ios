@@ -21,7 +21,8 @@ struct SessionHistoryView: View {
                 } else {
                     List(viewModel.fetchedSessions) { session in
                         Section {
-                            ForEach(session.items) { item in
+                            // 🔥 수정: 모델에 맞춰 checklists 사용
+                            ForEach(session.checklists) { item in
                                 HStack(spacing: 12) {
                                     Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                                         .font(.system(size: 16))
@@ -58,8 +59,11 @@ struct SessionHistoryView: View {
                     }
                 }
             }
-            .task {
-                await viewModel.fetchSessionHistory()
+            // 🔥 Task 대신 onAppear 사용 권장 (시점 이슈 방지)
+            .onAppear {
+                Task {
+                    await viewModel.fetchSessionHistory()
+                }
             }
         }
         .presentationDetents([.medium, .large])
@@ -74,9 +78,12 @@ struct SessionHistoryView: View {
             let displayFormatter = DateFormatter()
             // 한국 시간에 맞게 예쁘게 출력
             displayFormatter.dateFormat = "yyyy년 M월 d일 HH:mm 완료"
+            // 기기의 로컬 타임존으로 표시
+            displayFormatter.timeZone = TimeZone.current
             return displayFormatter.string(from: date)
         }
         
-        return timestamp
+        // 파싱 실패 시 T를 기준으로 날짜만이라도 보여주는 안전장치
+        return timestamp.components(separatedBy: "T").first ?? timestamp
     }
 }

@@ -59,8 +59,6 @@ final class SessionStore: ObservableObject {
 
         let previousCount = session.discoveredStarCount
         
-        // 🚨 주의: 만약 여기서 에러가 난다면, DiscoveryScheduler.swift 파일도 옛날 버전으로
-        // 돌아간 것입니다. 그럴 땐 elapsedOffset: 파라미터를 지워주시거나 알려주세요!
         let syncedCount = scheduler.syncDiscoveredStarCount(
             now: now,
             startedAt: session.startedAt,
@@ -88,10 +86,6 @@ final class SessionStore: ObservableObject {
         return (session.discoveredStarCount > previousCount, nil)
     }
 
-    func currentStatus() -> SessionStatus? {
-        currentSession?.status
-    }
-
     // 2. 🔥 activeElapsed에 elapsedOffset 더하는 로직 복구
     func activeElapsed(now: Date = Date()) -> TimeInterval {
         guard let session = currentSession, let runtimeState else { return 0 }
@@ -111,6 +105,10 @@ final class SessionStore: ObservableObject {
 
     func pausedAtDate() -> Date? {
         runtimeState?.pausedAt
+    }
+
+    func currentStatus() -> SessionStatus? {
+        currentSession?.status
     }
 
     func updateMemo(sessionId: UUID, memo: SessionMemo) {

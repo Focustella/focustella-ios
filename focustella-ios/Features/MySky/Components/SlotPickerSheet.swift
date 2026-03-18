@@ -1,6 +1,8 @@
 import SwiftUI
+import os
 
 struct SlotPickerSheet: View {
+    private static let logger = Logger(subsystem: "focustella-ios", category: "FocusSession")
     let onSelect: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -51,7 +53,10 @@ struct SlotPickerSheet: View {
                 )
 
                 Button {
-                    onSelect(max(5 * 60, totalSeconds))
+                    let selectedSeconds = max(30 * 60, totalSeconds)
+                    Self.logger.notice("slot picker start tapped. selectedSeconds=\(selectedSeconds, privacy: .public)")
+                    print("🛰️ [FocusSession] SlotPicker start tapped. selectedSeconds=\(selectedSeconds)")
+                    onSelect(selectedSeconds)
                     dismiss()
                 } label: {
                     Text("시작하기")
@@ -74,6 +79,7 @@ struct SlotPickerSheet: View {
             .navigationTitle("집중 시간")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
+                Self.logger.notice("slot picker appeared")
                 applyTemplate(30 * 60)
             }
         }
@@ -81,7 +87,7 @@ struct SlotPickerSheet: View {
     }
 
     private func applyTemplate(_ seconds: Int) {
-        totalSeconds = (max(5 * 60, seconds) / (5 * 60)) * (5 * 60)
+        totalSeconds = (max(30 * 60, seconds) / (5 * 60)) * (5 * 60)
     }
 }
 
@@ -161,11 +167,11 @@ private struct CountdownColonPicker: UIViewRepresentable {
             guard component != 1 else { return }
             let hour = pickerView.selectedRow(inComponent: 0)
             let minute = minuteSteps[pickerView.selectedRow(inComponent: 2)]
-            totalSeconds = max(5 * 60, (hour * 3600) + (minute * 60))
+            totalSeconds = max(30 * 60, (hour * 3600) + (minute * 60))
         }
 
         func applySelection(on pickerView: UIPickerView, totalSeconds: Int) {
-            let clamped = max(5 * 60, totalSeconds)
+            let clamped = max(30 * 60, totalSeconds)
             let hour = min(maxHour, clamped / 3600)
             let minute = (clamped % 3600) / 60
             let snappedMinute = (minute / 5) * 5

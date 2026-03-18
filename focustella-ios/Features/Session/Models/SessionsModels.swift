@@ -3,42 +3,40 @@
 import Foundation
 
 struct ChecklistItem: Identifiable, Codable, Equatable {
-    var id = UUID()
+    // 서버의 itemUuid와 매칭됩니다.
+    var id: UUID = UUID()
     var title: String
     var isCompleted: Bool = false
+    
     enum CodingKeys: String, CodingKey {
-            case id = "itemUuid"
-            case title
-            case isCompleted
-        }
+        case id = "itemUuid"
+        case title
+        case isCompleted
+    }
 }
 
 struct ChecklistTemplate: Identifiable, Codable, Equatable {
-    var id = UUID()
+    var id: UUID = UUID()
     var name: String
     var items: [ChecklistItem]
 }
 
-// 🔥 변경점 1: 서버 전송용 DTO (String -> Array)
+// 🔥 서버 전송용 DTO (String -> Array)
 struct DailySessionSaveRequest: Codable {
     let timestamp: String
-    let items: [ChecklistItem] // checklists(String) 대신 명확한 배열 사용
-    // 🔥 JSON으로 인코딩될 때의 Key 이름을 서버 스펙과 맞춰주는 역할
-    enum CodingKeys: String, CodingKey {
-            case timestamp
-            case items = "checklists" // 클라이언트의 items를 서버의 checklists로 매핑!
-    }
+    let checklists: [ChecklistItem] // 서버 스펙에 맞춰 checklists로 통일!
 }
 
-// 🔥 변경점 2: 서버 수신용 DTO (String -> Array)
+// 🔥 서버 수신용 DTO (String -> Array)
 struct FetchedDailySession: Identifiable, Codable {
-    var id: UUID = UUID()
+    var id: UUID = UUID() // 로컬 List용 ID
     let timestamp: String
-    let items: [ChecklistItem] // 서버에서 넘겨주는 JSON 배열을 바로 매핑
+    
+    // 🔥 중요: String에서 [ChecklistItem] 배열로 변경!
+    let checklists: [ChecklistItem]
     
     enum CodingKeys: String, CodingKey {
         case timestamp
-        case items = "checklists" // 백엔드 JSON 키가 여전히 "checklists"라면 매핑, "items"로 바꿨다면 이 줄도 삭제!
+        case checklists
     }
 }
-    
