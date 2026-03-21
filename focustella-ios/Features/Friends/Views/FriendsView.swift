@@ -97,7 +97,6 @@ struct FriendsView: View {
             }
             .onAppear {
                 viewModel.fetchFriends()
-                viewModel.fetchRequests()
             }
         }
     }

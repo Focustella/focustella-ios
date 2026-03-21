@@ -1,5 +1,6 @@
 import Foundation
 
+<<<<<<< HEAD
 private struct EmptyPayload: Decodable {}
 
 private struct AnyEncodable: Encodable {

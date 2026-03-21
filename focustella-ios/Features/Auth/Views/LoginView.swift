@@ -11,6 +11,28 @@ struct LoginView: View {
     @AppStorage("accessToken") private var accessToken: String = ""
     @AppStorage("userId") private var userId: String = ""
     @AppStorage("userSeed") private var userSeed: Int = 0
+    @State private var isGuestLoading = false
+    @State private var devUUID: String = ""
+
+    @AppStorage("developerMode") private var developerMode: Bool = false
+    
+    // 🔥 다른 뷰모델들과 동일한 "serverIP" 키를 사용하여 서버 주소를 공유합니다.
+    @AppStorage("serverIP") private var serverIP: String = ""
+
+    // 🔥 개발자 모드 여부와 입력된 IP에 따라 동적으로 baseURL을 생성합니다.
+    private var currentAPIURL: String {
+        if developerMode {
+            let customIP = serverIP.trimmingCharacters(in: .whitespaces)
+            if customIP.isEmpty || customIP == "localhost" {
+                return "http://localhost:8080/api/v1"
+            } else {
+                return "http://\(customIP):8080/api/v1"
+            }
+        } else {
+            // 실제 운영 서버 주소
+            return "https://api.focustella.com/api/v1"
+        }
+    }
     
     var body: some View {
         ZStack {
@@ -53,6 +75,37 @@ struct LoginView: View {
                 
                 Spacer()
                 
+                // 🔥 개발자 모드: 서버 IP 및 특정 UUID 설정 영역
+                if developerMode {
+                    VStack(spacing: 12) {
+                        // 서버 IP 입력 칸
+                        TextField("서버 IP (예: 192.168.0.10)", text: $serverIP)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(10)
+                            .foregroundStyle(.white)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.system(size: 13, design: .monospaced))
+                        
+                        // UUID 입력 칸
+                        TextField("UUID 직접 입력 (비워두면 랜덤)", text: $devUUID)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(10)
+                            .foregroundStyle(.white)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.system(size: 13, design: .monospaced))
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 16)
+                }
+
                 // 🚀 4-A. 결제 전까지 임시로 사용할 더미 로그인 버튼
                 Button {
                     
@@ -88,20 +141,6 @@ struct LoginView: View {
                 }
                 .disabled(viewModel.isGuestLoading)
                 .padding(.bottom, 60)
-
-                /*
-                // 🔒 4-B. 나중에 개발자 계정 결제 후 주석 해제해서 사용할 진짜 버튼
-                SignInWithAppleButton(.signIn) { request in
-                    request.requestedScopes = [.fullName, .email]
-                } onCompletion: { result in
-                    handleAppleLoginResult(result)
-                }
-                .signInWithAppleButtonStyle(.white)
-                .frame(height: 56)
-                .cornerRadius(100)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 60)
-                */
             }
         }
         .alert("게스트로 로그인", isPresented: $showGuestAlert) {
@@ -131,7 +170,6 @@ struct LoginView: View {
             print("🚨 [게스트 로그인 실패] \(error.localizedDescription)")
         }
     }
-
     // MARK: - (보존용) 진짜 애플 로그인 결과 처리 로직
     private func handleAppleLoginResult(_ result: Result<ASAuthorization, Error>) {
         switch result {

@@ -5,50 +5,105 @@ import Combine
 final class FriendsViewModel: ObservableObject {
     @Published var friends: [Friend] = []
     @Published var pendingRequests: [FriendRequest] = []
-    
-    // UI에서 사용할 친구 추가 입력값
+    @Published var isLoading: Bool = false
+    @Published var errorMessage: String? = nil
+
     @Published var newFriendID: String = ""
-    
-    // 1. 친구 목록 조회 (GET /api/v1/friends)
+
+    private let apiClient = APIClient.shared
+
+    private var currentUserId: String {
+        UserDefaults.standard.string(forKey: "userId") ?? ""
+    }
+
+    // 친구 목록 + 받은 요청 한 번에 로드 (GET /api/v1/friend?userId={userId})
     func fetchFriends() {
-        // TODO: 실제 API 호출 코드 작성
-        // 임시 더미 데이터
-        self.friends = [
-            Friend(id: "user1", name: "김개발"),
-            Friend(id: "user2", name: "이코딩")
-        ]
+        guard !currentUserId.isEmpty else {
+            print("⚠️ [Friends] userId가 없어 fetchFriends 스킵")
+            return
+        }
+        print("📡 [Friends] fetchFriends 요청 - userId: \(currentUserId)")
+        Task {
+            isLoading = true
+            defer { isLoading = false }
+            do {
+                let response: APIResponse<[FriendRelationDTO]> = try await apiClient.get(
+                    "/api/v1/friend",
+                    queryItems: [URLQueryItem(name: "userId", value: currentUserId)]
+                )
+                print("✅ [Friends] fetchFriends 응답 - success: \(response.success), 항목 수: \(response.data?.count ?? 0)")
+
+                guard response.success, let relations = response.data else {
+                    print("⚠️ [Friends] fetchFriends 응답 실패 또는 data nil")
+                    return
+                }
+
+                friends = relations
+                    .filter { $0.status == "ACCEPTED" }
+                    .map { dto in
+                        let otherId = dto.requesterId == currentUserId ? dto.receiverId : dto.requesterId
+                        return Friend(id: otherId, name: otherId)
+                    }
+                print("👥 [Friends] 친구 목록: \(friends.map(\.id))")
+
+                pendingRequests = relations
+                    .filter { $0.status == "PENDING" && $0.receiverId == currentUserId }
+                    .map { dto in
+                        FriendRequest(id: dto.id, senderName: dto.requesterId)
+                    }
+                print("📬 [Friends] 받은 요청: \(pendingRequests.map(\.id))")
+            } catch {
+                print("🚨 [Friends] fetchFriends 실패: \(error)")
+                errorMessage = error.localizedDescription
+            }
+        }
     }
-    
-    // 2. 받은 친구 요청 조회 (GET /api/v1/friends/requests)
-    func fetchRequests() {
-        // TODO: 실제 API 호출 코드 작성
-        self.pendingRequests = [
-            FriendRequest(id: "req1", senderName: "박스위프트")
-        ]
-    }
-    
-    // 3. 친구 요청 보내기 (POST /api/v1/friends/requests)
+
+    // 친구 요청 보내기 (POST /api/v1/friend/request)
     func sendFriendRequest() {
-        guard !newFriendID.isEmpty else { return }
-        
-        // TODO: newFriendID를 파라미터로 API 호출
-        print("\(newFriendID) 에게 친구 요청을 보냈습니다.")
-        
-        // 요청 후 입력창 초기화
-        self.newFriendID = ""
+        guard !newFriendID.isEmpty, !currentUserId.isEmpty else {
+            print("⚠️ [Friends] sendFriendRequest 스킵 - newFriendID 또는 userId 없음")
+            return
+        }
+        let receiverId = newFriendID
+        newFriendID = ""
+        print("📡 [Friends] sendFriendRequest 요청 - requesterId: \(currentUserId), receiverId: \(receiverId)")
+
+        Task {
+            do {
+                let body = FriendRequestBody(requesterId: currentUserId, receiverId: receiverId)
+                let response: APIResponse<FriendRelationDTO> = try await apiClient.post(
+                    "/api/v1/friend/request",
+                    body: body
+                )
+                print("✅ [Friends] sendFriendRequest 응답 - success: \(response.success), relationId: \(response.data?.id ?? "nil")")
+            } catch {
+                print("🚨 [Friends] sendFriendRequest 실패: \(error)")
+                errorMessage = error.localizedDescription
+            }
+        }
     }
-    
-    // 4. 친구 요청 수락/거절 (POST or PUT or DELETE /api/v1/friends/requests/{id})
+
+    // 친구 요청 수락/거절 (POST /api/v1/friend/accept)
     func respondToRequest(requestID: String, isAccepted: Bool) {
-        // TODO: requestID와 isAccepted 여부를 바탕으로 API 호출
-        print("요청 ID \(requestID) 를 \(isAccepted ? "수락" : "거절") 했습니다.")
-        
-        // 임시로 UI에서 바로 제거
-        self.pendingRequests.removeAll { $0.id == requestID }
-        
-        // 수락했을 경우 친구 목록을 다시 불러오는 로직 추가 가능
-        if isAccepted {
-            fetchFriends()
+        print("📡 [Friends] respondToRequest - relationId: \(requestID), accept: \(isAccepted)")
+        pendingRequests.removeAll { $0.id == requestID }
+
+        Task {
+            do {
+                let body = FriendAcceptBody(relationId: requestID, accept: isAccepted)
+                let response: APIResponse<EmptyData> = try await apiClient.post(
+                    "/api/v1/friend/accept",
+                    body: body
+                )
+                print("✅ [Friends] respondToRequest 응답 - success: \(response.success)")
+                if isAccepted {
+                    fetchFriends()
+                }
+            } catch {
+                print("🚨 [Friends] respondToRequest 실패: \(error)")
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
