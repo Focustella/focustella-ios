@@ -1,7 +1,11 @@
 import SwiftUI
 import Foundation
+import os
 
 struct DevConstellationStudioView: View {
+    private static let logger = Logger(subsystem: "focustella-ios", category: "DevConstellation")
+
+    @AppStorage("userId") private var userId: String = ""
     @State private var name: String = ""
     @State private var relativePoints: [CGPoint] = []
     @State private var closeLoop: Bool = false
@@ -9,7 +13,7 @@ struct DevConstellationStudioView: View {
     @State private var message: String?
 
     private let repository = ConstellationRepository()
-    private let mockUserId = "mock-user-001"
+    private let fallbackLocalUserId = "local-user"
 
     var body: some View {
         VStack(spacing: 16) {
@@ -109,15 +113,23 @@ struct DevConstellationStudioView: View {
 
         let edges = buildEdges(count: relativePoints.count, closeLoop: closeLoop)
         Task { @MainActor in
+            let targetUserId = userId.isEmpty ? fallbackLocalUserId : userId
+            Self.logger.notice("dev insert request name=\(constellationName, privacy: .public) userId=\(targetUserId, privacy: .public) stars=\(relativePoints.count) edges=\(edges.count)")
             let insertedId = await repository.insertUserConstellation(
-                userId: mockUserId,
+                userId: targetUserId,
                 name: constellationName,
                 relativeStars: relativePoints,
                 edges: edges,
                 visualStyle: .debugRed
             )
             isSaving = false
-            message = "삽입 완료: MySky에 바로 반영됩니다."
+            if let insertedId {
+                Self.logger.notice("dev insert stored id=\(insertedId, privacy: .public)")
+                message = "삽입 완료: MySky에 바로 반영됩니다."
+            } else {
+                Self.logger.error("dev insert failed to store constellation")
+                message = "삽입 실패: 로그를 확인하세요."
+            }
             NotificationCenter.default.post(name: .didInsertUserConstellation, object: insertedId)
         }
     }

@@ -15,16 +15,43 @@ final class SessionStore: ObservableObject {
 
     private var runtimeState: RuntimeState?
 
-    func startSession(slotSeconds: Int, constellationId: UUID, now: Date = Date()) {
+    func startSession(
+        slotSeconds: Int,
+        constellationId: UUID,
+        serverSessionId: String? = nil,
+        serverConstellationId: Int? = nil,
+        now: Date = Date()
+    ) {
         currentSession = FocusSession(
             startedAt: now,
             slotSeconds: slotSeconds,
             constellationId: constellationId,
             discoveredStarCount: 0, // 🔥 1에서 0으로 수정 (시작할 때 별은 0개부터)
-            status: .running
+            status: .running,
+            memo: nil
         )
+        if let currentSession {
+            self.currentSession = FocusSession(
+                id: currentSession.id,
+                serverSessionId: serverSessionId,
+                serverConstellationId: serverConstellationId,
+                startedAt: currentSession.startedAt,
+                endedAt: currentSession.endedAt,
+                slotSeconds: currentSession.slotSeconds,
+                constellationId: currentSession.constellationId,
+                discoveredStarCount: currentSession.discoveredStarCount,
+                status: currentSession.status,
+                memo: currentSession.memo
+            )
+        }
         // 🔥 초기화에 elapsedOffset 추가
         runtimeState = RuntimeState(pausedAccumulated: 0, pausedAt: nil, elapsedOffset: 0)
+    }
+
+    func replaceCompletedSessions(_ sessions: [FocusSession]) {
+        completedSessions = sessions.sorted { lhs, rhs in
+            (lhs.endedAt ?? lhs.startedAt) > (rhs.endedAt ?? rhs.startedAt)
+        }
     }
 
     func pause(now: Date = Date()) {
@@ -114,6 +141,11 @@ final class SessionStore: ObservableObject {
     func updateMemo(sessionId: UUID, memo: SessionMemo) {
         guard let index = completedSessions.firstIndex(where: { $0.id == sessionId }) else { return }
         completedSessions[index].memo = memo
+    }
+
+    func appendCompletedSession(_ session: FocusSession) {
+        completedSessions.removeAll { $0.id == session.id || $0.constellationId == session.constellationId }
+        completedSessions.insert(session, at: 0)
     }
 
     func latestSession(constellationId: UUID) -> FocusSession? {

@@ -13,11 +13,14 @@ struct MySkyView: View {
     }
 
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var viewModel = MySkyViewModel()
     @StateObject private var sessionStore = SessionStore()
     @StateObject private var accessibility = AppAccessibility.shared
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("starStyle") private var starStyle: StarAppearanceStyle = .realistic
+    @AppStorage("userId") private var userId: String = ""
+    @AppStorage("userSeed") private var userSeed: Int = 0
     
     // 🔥 튜토리얼 진행 상태 저장
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
@@ -57,11 +60,12 @@ struct MySkyView: View {
     @State private var completionFlowTask: Task<Void, Never>?
     @State private var completionEdgeOrder: [Int] = []
     @State private var hasLaidOutCTA = false
+    @State private var hasInitializedView = false
     @State private var placedConstellations: [Constellation] = []
-    @State private var previewConstellations: [Constellation] = []
     @State private var visibleDiscoveredStarCounts: [UUID: Int] = [:]
     @State private var edgeRevealStates: [UUID: EdgeRevealState] = [:]
     @State private var edgeRevealTokens: [UUID: Int] = [:]
+    @State private var isFetchingSky = false
     
     private let ctaFadeDuration: Double = 0.38
     private let ctaIdleDelay: Double = 1.5
@@ -71,7 +75,7 @@ struct MySkyView: View {
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let ambientStars: [AmbientStar] = AmbientStar.makeSeeded(count: 90, seed: 20260308)
-    private let mockUserId = "mock-user-001"
+    private let fallbackLocalUserId = "local-user"
 
     private var isSkyInteractionLocked: Bool {
         pendingMemoSessionId != nil || showMemoSheet || tutorialStep != .done
@@ -206,14 +210,23 @@ struct MySkyView: View {
                 }
             }
             .onAppear {
+                canvasSize = size
+                guard !hasInitializedView else { return }
+
+                hasInitializedView = true
                 if !hasSeenTutorial { tutorialStep = .welcome }
                 else { tutorialStep = .done }
-                
+
                 showCTA = sessionStore.currentSession == nil
                 hasLaidOutCTA = true
-                canvasSize = size
-                loadInitialPreviewConstellations()
                 parseDailyStars()
+
+                // Keep the first sky fetch on initial mount only so tab switches do not
+                // recreate the whole sky state and trigger another expensive re-render.
+                Task {
+                    await refreshSky()
+                    await syncLocalInsertedConstellations()
+                }
             }
             .onChange(of: size) { _, newValue in canvasSize = newValue }
             .onReceive(tick) { now in syncSession(now: now) }
@@ -221,12 +234,14 @@ struct MySkyView: View {
                 if phase == .active {
                     syncSession(now: Date())
                     scheduleCTA()
+                    Task { await syncLocalInsertedConstellations() }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .didInsertUserConstellation)) { notification in
                 let extractedId: String? = (notification.object as? String) ?? (notification.object as? String?)?.flatMap { $0 }
                 guard let insertedId = extractedId else { return }
-                insertUserConstellationPreview(id: insertedId)
+                Self.logger.notice("received dev constellation notification id=\(insertedId, privacy: .public)")
+                insertUserConstellationAsCompleted(id: insertedId)
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DailySessionCompleted"))) { _ in
                 triggerDailyRewardSequence(size: canvasSize)
@@ -235,9 +250,16 @@ struct MySkyView: View {
             .sheet(isPresented: $showDailySessionSheet) { DailySessionView() }
             .sheet(isPresented: $showMemoSheet, onDismiss: { if pendingMemoSessionId == nil { scheduleCTA() } }) {
                 MemoSheet { memo in
-                    if let sessionId = pendingMemoSessionId { sessionStore.updateMemo(sessionId: sessionId, memo: memo) }
-                    pendingMemoSessionId = nil; selectedSession = nil
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) { showCompletionOverlay = false; showCompletionRecordButton = false }
+                    let didSave = await saveCompletedSessionMemo(memo)
+                    if didSave {
+                        pendingMemoSessionId = nil
+                        selectedSession = nil
+                        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                            showCompletionOverlay = false
+                            showCompletionRecordButton = false
+                        }
+                    }
+                    return didSave
                 }
             }
             .overlay(alignment: .bottom) {
@@ -273,7 +295,11 @@ struct MySkyView: View {
     // MARK: - 🔥 튜토리얼 타임워프 세션 로직
     private func startTutorialWarpSession(size: CGSize) {
         Task { @MainActor in
-            guard let constellation = await repository.fetchSessionConstellation(durationSeconds: 300, occupied: placedConstellations, userId: mockUserId) else { return }
+            guard let constellation = await repository.fetchSessionConstellation(
+                durationSeconds: 300,
+                occupied: placedConstellations,
+                userId: localConstellationUserId
+            ) else { return }
             
             placedConstellations.append(constellation)
             visibleDiscoveredStarCounts[constellation.id] = 0
@@ -371,27 +397,36 @@ struct MySkyView: View {
         Task { @MainActor in
             guard sessionStore.currentSession == nil else { return }
             let normalizedSeconds = max(30 * 60, slotSeconds)
-            let fullOccupied = placedConstellations + previewConstellations
-            var constellation = await repository.fetchSessionConstellation(durationSeconds: normalizedSeconds, occupied: fullOccupied, userId: mockUserId)
+            do {
+                let created = try await viewModel.createFocusSession(durationMinutes: normalizedSeconds / 60)
+                guard let constellation = viewModel.placeCreatedConstellation(created, occupied: placedConstellations) else {
+                    Self.logger.error("focus create placement failed for sessionId=\(created.focusSessionId)")
+                    return
+                }
+                guard !constellation.stars.isEmpty else { return }
 
-            if constellation == nil, !previewConstellations.isEmpty {
-                constellation = await repository.fetchSessionConstellation(durationSeconds: normalizedSeconds, occupied: placedConstellations, userId: mockUserId)
+                if !placedConstellations.contains(where: { $0.id == constellation.id }) {
+                    placedConstellations.append(constellation)
+                }
+                pendingCameraMoveTask?.cancel()
+                completionFlowTask?.cancel()
+                showCompletionOverlay = false
+                showCompletionRecordButton = false
+                pendingMemoSessionId = nil
+                visibleDiscoveredStarCounts[constellation.id] = 0
+                edgeRevealStates[constellation.id] = EdgeRevealState()
+                sessionStore.startSession(
+                    slotSeconds: normalizedSeconds,
+                    constellationId: constellation.id,
+                    serverSessionId: created.focusSessionId,
+                    serverConstellationId: created.constellationId
+                )
+                selectedSession = nil
+                showCTA = false
+                focusNextStarIfNeeded(constellation: constellation, size: canvasSize)
+            } catch {
+                Self.logger.error("focus create failed: \(error.localizedDescription)")
             }
-
-            guard let constellation else { return }
-            prunePreviewConstellations(conflictingWith: constellation)
-            placedConstellations.append(constellation)
-            pendingCameraMoveTask?.cancel()
-            completionFlowTask?.cancel()
-            showCompletionOverlay = false
-            showCompletionRecordButton = false
-            pendingMemoSessionId = nil
-            visibleDiscoveredStarCounts[constellation.id] = 0
-            edgeRevealStates[constellation.id] = EdgeRevealState()
-            sessionStore.startSession(slotSeconds: normalizedSeconds, constellationId: constellation.id)
-            selectedSession = nil
-            showCTA = false
-            focusNextStarIfNeeded(constellation: constellation, size: canvasSize)
         }
     }
 
@@ -790,12 +825,6 @@ struct MySkyView: View {
                 DailyRewardStarNode(position: wPt)
             }
 
-            ForEach(previewConstellations) { constellation in
-                if !activeConstellationIds.contains(constellation.id) {
-                    ConstellationRenderer(constellation: constellation, discoveredStarCount: constellation.starCount, showEdges: true, edgeProgress: 1, reduceMotion: accessibility.isReduceMotionEnabled, highPerformanceMode: highPerformanceMode, starStyle: starStyle).opacity(0.5)
-                }
-            }
-
             ForEach(sessionStore.completedSessions) { session in
                 if completionConstellationId != session.constellationId, let constellation = constellationById(session.constellationId) {
                     let visibleCount = visibleDiscoveredStarCounts[session.constellationId] ?? constellation.starCount
@@ -811,45 +840,92 @@ struct MySkyView: View {
         }.frame(width: size.width, height: size.height)
     }
 
-    private func loadInitialPreviewConstellations() {
+    private func insertUserConstellationAsCompleted(id: String) {
         Task { @MainActor in
-            guard previewConstellations.isEmpty else { return }
-            previewConstellations = await repository.fetchInitialPreviewConstellations(occupied: placedConstellations, limit: 3)
-        }
-    }
-
-    private func insertUserConstellationPreview(id: String) {
-        Task { @MainActor in
-            let occupied = placedConstellations + previewConstellations
-            if let constellation = await repository.fetchInsertedUserConstellation(id: id, userId: mockUserId, occupied: occupied) {
-                if !previewConstellations.contains(where: { $0.id == constellation.id }) { previewConstellations.insert(constellation, at: 0) }
+            Self.logger.notice("attempting dev constellation placement id=\(id, privacy: .public)")
+            let preferredPlacement = await repository.fetchInsertedUserConstellation(
+                id: id,
+                userId: localConstellationUserId,
+                occupied: placedConstellations
+            )
+            let inserted: Constellation?
+            if let preferredPlacement {
+                inserted = preferredPlacement
             } else {
-                if let forcedConstellation = await repository.fetchInsertedUserConstellation(id: id, userId: mockUserId, occupied: placedConstellations) {
-                    previewConstellations.removeAll()
-                    previewConstellations.append(forcedConstellation)
-                }
+                inserted = await repository.fetchInsertedUserConstellation(
+                    id: id,
+                    userId: localConstellationUserId,
+                    occupied: placedConstellations
+                )
             }
+
+            guard let constellation = inserted else {
+                Self.logger.error("dev constellation placement failed id=\(id, privacy: .public)")
+                return
+            }
+
+            Self.logger.notice("dev constellation placed id=\(id, privacy: .public) constellationId=\(constellation.id.uuidString, privacy: .public) stars=\(constellation.starCount)")
+            applyInsertedConstellationAsCompleted(constellation, selectSession: true)
         }
     }
 
-    private func prunePreviewConstellations(conflictingWith constellation: Constellation) {
-        previewConstellations.removeAll { preview in
-            guard preview.id != constellation.id else { return true }
-            return constellationsLikelyOverlap(preview, constellation)
+    @MainActor
+    private func syncLocalInsertedConstellations() async {
+        let existingIds = Set(sessionStore.completedSessions.map(\.constellationId))
+        let insertedConstellations = await repository.fetchCustomConstellations(
+            userId: localConstellationUserId,
+            occupied: placedConstellations
+        )
+
+        Self.logger.notice("sync local constellations fetched=\(insertedConstellations.count) existingSessions=\(existingIds.count)")
+
+        for constellation in insertedConstellations where !existingIds.contains(constellation.id) {
+            Self.logger.notice("rehydrating local constellation constellationId=\(constellation.id.uuidString, privacy: .public) name=\(constellation.name, privacy: .public)")
+            applyInsertedConstellationAsCompleted(constellation, selectSession: false)
         }
     }
 
-    private func constellationsLikelyOverlap(_ lhs: Constellation, _ rhs: Constellation) -> Bool {
-        let lhsRadius = constellationRadius(lhs)
-        let rhsRadius = constellationRadius(rhs)
-        let dx = lhs.representativePoint.x - rhs.representativePoint.x
-        let dy = lhs.representativePoint.y - rhs.representativePoint.y
-        return hypot(dx, dy) < (lhsRadius + rhsRadius + 0.02)
+    @MainActor
+    private func applyInsertedConstellationAsCompleted(_ constellation: Constellation, selectSession: Bool) {
+        let endedAt = Date()
+        let startedAt = endedAt.addingTimeInterval(-25 * 60)
+        let completedSession = FocusSession(
+            startedAt: startedAt,
+            endedAt: endedAt,
+            slotSeconds: 25 * 60,
+            constellationId: constellation.id,
+            discoveredStarCount: constellation.starCount,
+            status: .completed,
+            memo: nil
+        )
+
+        // Dev insertion should behave like a finished focus session already present in the sky.
+        Self.logger.notice("applying inserted constellation as completed constellationId=\(constellation.id.uuidString, privacy: .public) selectSession=\(selectSession)")
+        applyCompletedSessionToSky(completedSession, constellation: constellation, selectSession: selectSession)
     }
 
-    private func constellationRadius(_ constellation: Constellation) -> CGFloat {
-        let rep = constellation.representativePoint
-        return (constellation.stars.map { hypot($0.x - rep.x, $0.y - rep.y) }.max() ?? 0) + 0.035
+    @MainActor
+    private func applyCompletedSessionToSky(
+        _ session: FocusSession,
+        constellation: Constellation,
+        selectSession: Bool
+    ) {
+        if !placedConstellations.contains(where: { $0.id == constellation.id }) {
+            placedConstellations.append(constellation)
+        }
+
+        sessionStore.appendCompletedSession(session)
+        Self.logger.notice("completed session applied constellationId=\(constellation.id.uuidString, privacy: .public) sessionId=\(session.id.uuidString, privacy: .public) discovered=\(session.discoveredStarCount)")
+        visibleDiscoveredStarCounts[constellation.id] = session.discoveredStarCount
+        edgeRevealStates[constellation.id] = EdgeRevealState(
+            committedDiscoveredCount: session.discoveredStarCount,
+            pendingDiscoveredCount: nil,
+            progress: 0
+        )
+
+        if selectSession {
+            selectedSession = session
+        }
     }
 
     @ViewBuilder
@@ -865,6 +941,137 @@ struct MySkyView: View {
         }
         .padding(14).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
         .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { selectedSession = nil } }
+    }
+
+    @MainActor
+    private func refreshSky() async {
+        guard !isFetchingSky else { return }
+        isFetchingSky = true
+        defer { isFetchingSky = false }
+
+        do {
+            let sky = try await viewModel.fetchMySky()
+            userSeed = Int(sky.seed)
+            dailyStars = sky.dailyStars
+            dailyStarsData = dailyStars.map { "\($0.x),\($0.y)" }.joined(separator: "|")
+
+            let mergedSky = mergeRemoteSkyWithLocalState(sky)
+            placedConstellations = mergedSky.constellations
+            sessionStore.replaceCompletedSessions(mergedSky.completedSessions)
+            visibleDiscoveredStarCounts = Dictionary(uniqueKeysWithValues: mergedSky.completedSessions.map { ($0.constellationId, $0.discoveredStarCount) })
+            edgeRevealStates = Dictionary(
+                uniqueKeysWithValues: mergedSky.completedSessions.map {
+                    (
+                        $0.constellationId,
+                        EdgeRevealState(
+                            committedDiscoveredCount: $0.discoveredStarCount,
+                            pendingDiscoveredCount: nil,
+                            progress: 0
+                        )
+                    )
+                }
+            )
+        } catch {
+            Self.logger.error("sky fetch failed: \(error.localizedDescription)")
+        }
+    }
+
+    private var localConstellationUserId: String {
+        userId.isEmpty ? fallbackLocalUserId : userId
+    }
+
+    private func mergeRemoteSkyWithLocalState(_ remoteSky: MySkySnapshot) -> MySkySnapshot {
+        let remoteServerSessionIds = Set(remoteSky.completedSessions.compactMap(\.serverSessionId))
+        let localSessionsToPreserve = sessionStore.completedSessions.filter { session in
+            guard let constellation = placedConstellations.first(where: { $0.id == session.constellationId }) else {
+                return false
+            }
+
+            _ = constellation
+            guard let serverSessionId = session.serverSessionId else {
+                return true
+            }
+
+            return !remoteServerSessionIds.contains(serverSessionId)
+        }
+
+        let localConstellationsToPreserve = localSessionsToPreserve.compactMap { session in
+            placedConstellations.first(where: { $0.id == session.constellationId })
+        }
+
+        let mergedSessions = mergedFocusSessions(remote: remoteSky.completedSessions, local: localSessionsToPreserve)
+        let mergedConstellations = mergedConstellations(remote: remoteSky.constellations, local: localConstellationsToPreserve)
+
+        return MySkySnapshot(
+            seed: remoteSky.seed,
+            dailyStars: remoteSky.dailyStars,
+            completedSessions: mergedSessions,
+            constellations: mergedConstellations
+        )
+    }
+
+    private func mergedFocusSessions(remote: [FocusSession], local: [FocusSession]) -> [FocusSession] {
+        var result: [FocusSession] = remote
+        let existingKeys = Set(remote.map(sessionIdentityKey))
+
+        for session in local where !existingKeys.contains(sessionIdentityKey(session)) {
+            result.append(session)
+        }
+
+        return result.sorted { lhs, rhs in
+            (lhs.endedAt ?? lhs.startedAt) > (rhs.endedAt ?? rhs.startedAt)
+        }
+    }
+
+    private func mergedConstellations(remote: [Constellation], local: [Constellation]) -> [Constellation] {
+        var result: [Constellation] = remote
+        var seenIds = Set(remote.map(\.id))
+
+        for constellation in local where seenIds.insert(constellation.id).inserted {
+            result.append(constellation)
+        }
+
+        return result
+    }
+
+    private func sessionIdentityKey(_ session: FocusSession) -> String {
+        if let serverSessionId = session.serverSessionId {
+            return "server:\(serverSessionId)"
+        }
+        return "local:\(session.id.uuidString)"
+    }
+
+    @MainActor
+    private func saveCompletedSessionMemo(_ memo: SessionMemo) async -> Bool {
+        guard let pendingMemoSessionId else { return false }
+        guard let session = sessionStore.completedSessions.first(where: { $0.id == pendingMemoSessionId }) else { return false }
+        guard let serverSessionId = session.serverSessionId, let serverConstellationId = session.serverConstellationId else {
+            sessionStore.updateMemo(sessionId: pendingMemoSessionId, memo: memo)
+            return true
+        }
+
+        let endedAt = session.endedAt ?? Date()
+        let request = FocusSessionSaveRequestDTO(
+            sessionId: serverSessionId,
+            constellationId: serverConstellationId,
+            startedAt: session.startedAt.ISO8601Format(),
+            endedAt: endedAt.ISO8601Format(),
+            slotSeconds: session.slotSeconds,
+            discoveredStarCount: session.discoveredStarCount,
+            topicTags: memo.topicTags,
+            rating: memo.rating,
+            freeText: memo.freeText
+        )
+
+        do {
+            try await viewModel.saveCompletedSession(request)
+            sessionStore.updateMemo(sessionId: pendingMemoSessionId, memo: memo)
+            await refreshSky()
+            return true
+        } catch {
+            Self.logger.error("focus save failed: \(error.localizedDescription)")
+            return false
+        }
     }
 }
 
