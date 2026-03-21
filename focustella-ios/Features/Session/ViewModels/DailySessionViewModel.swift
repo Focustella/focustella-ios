@@ -5,6 +5,9 @@ import UserNotifications
 
 @MainActor
 final class DailySessionViewModel: ObservableObject {
+    private let saveDailySessionUseCase: SaveDailySessionUseCase
+    private let fetchDailySessionsUseCase: FetchDailySessionsUseCase
+
     @Published var templates: [ChecklistTemplate] = []
     @Published var activeItems: [ChecklistItem] = []
     @Published var isSessionActive: Bool = false
@@ -19,24 +22,29 @@ final class DailySessionViewModel: ObservableObject {
     
     private let templatesKey = "Focustella_ChecklistTemplates"
     private let activeSessionKey = "Focustella_ActiveSessionItems"
-    private let currentUserUUID = "dummy-user-uuid-1234"
     
     // 상태 저장 키
     private let lastCompletedDateKey = "Focustella_LastCompletedDate"
     private let activeSessionStartDateKey = "Focustella_ActiveSessionStartDate"
     
-    private var baseURL: String {
-        let customIP = UserDefaults.standard.string(forKey: "serverIP") ?? "localhost"
-        if customIP != "localhost" && !customIP.isEmpty { return "http://\(customIP):8080/api/v1" }
-        if let infoURL = Bundle.main.object(forInfoDictionaryKey: "BASE_URL") as? String, !infoURL.isEmpty { return infoURL }
-        return "http://localhost:8080/api/v1"
-    }
-    
-    init() {
+    init(
+        saveDailySessionUseCase: SaveDailySessionUseCase,
+        fetchDailySessionsUseCase: FetchDailySessionsUseCase
+    ) {
+        self.saveDailySessionUseCase = saveDailySessionUseCase
+        self.fetchDailySessionsUseCase = fetchDailySessionsUseCase
         requestNotificationPermission()
         loadTemplates()
         loadActiveSession()
         refreshTodayStatus()
+    }
+
+    convenience init() {
+        let repository = DailySessionRepositoryImpl()
+        self.init(
+            saveDailySessionUseCase: SaveDailySessionUseCase(repository: repository),
+            fetchDailySessionsUseCase: FetchDailySessionsUseCase(repository: repository)
+        )
     }
     
     // MARK: - 1일 1회 및 자동 완료 로직
@@ -155,39 +163,22 @@ final class DailySessionViewModel: ObservableObject {
     
     // MARK: - Server 통신 로직
     func completeDailySession(isAuto: Bool = false) async {
-        // 🔥 깔끔해진 페이로드 생성 (items가 아닌 checklists 사용)
         let payload = DailySessionSaveRequest(
-            timestamp: Date().ISO8601Format(), // 전송 시점의 정확한 시간
-            checklists: activeItems // 배열을 그대로 넘깁니다!
+            timestamp: Date().ISO8601Format(),
+            checklists: activeItems
         )
-        
-        guard let url = URL(string: "\(baseURL)/session/daily") else { return }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(currentUserUUID, forHTTPHeaderField: "X-User-ID")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
         do {
-            request.httpBody = try JSONEncoder().encode(payload)
-            
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) {
-                print("✅ 서버 저장 성공! (URL: \(url.absoluteString))")
-                
-                await MainActor.run {
-                    // 완료 날짜 도장 찍기!
-                    UserDefaults.standard.set(Date().logicalDateString, forKey: self.lastCompletedDateKey)
-                    self.refreshTodayStatus()
-                    
-                    // 수동 완료일 때만 우주 별자리 애니메이션 띄우기
-                    if !isAuto {
-                        self.showCompletionAlert = true
-                    }
-                    self.clearActiveSession()
+            try await saveDailySessionUseCase.execute(payload)
+
+            await MainActor.run {
+                UserDefaults.standard.set(Date().logicalDateString, forKey: self.lastCompletedDateKey)
+                self.refreshTodayStatus()
+
+                if !isAuto {
+                    self.showCompletionAlert = true
                 }
-            } else {
-                print("❌ 서버 에러: 상태 코드 \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                self.clearActiveSession()
             }
         } catch {
             print("❌ 요청 실패: \(error.localizedDescription)")
@@ -196,22 +187,10 @@ final class DailySessionViewModel: ObservableObject {
     
     func fetchSessionHistory() async {
         self.isFetchingHistory = true
-        guard let url = URL(string: "\(baseURL)/session/daily?userId=\(currentUserUUID)") else {
-            self.isFetchingHistory = false
-            return
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        
+
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let jsonString = String(data: data, encoding: .utf8) {
-                print("🌐 서버 응답 데이터: \(jsonString)")
-            }
-            if let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) {
-                let decoded = try JSONDecoder().decode([FetchedDailySession].self, from: data)
-                await MainActor.run { self.fetchedSessions = decoded }
-            }
+            let decoded = try await fetchDailySessionsUseCase.execute()
+            await MainActor.run { self.fetchedSessions = decoded }
         } catch {
             print("❌ 데이터 조회 네트워크 오류: \(error.localizedDescription)")
         }
