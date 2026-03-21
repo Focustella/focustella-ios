@@ -24,7 +24,22 @@ struct ChecklistTemplate: Identifiable, Codable, Equatable {
 // 🔥 서버 전송용 DTO (String -> Array)
 struct DailySessionSaveRequest: Codable {
     let timestamp: String
-    let checklists: [ChecklistItem] // 서버 스펙에 맞춰 checklists로 통일!
+    let checklists: [DailySessionChecklistPayload]
+
+    init(timestamp: String, checklists: [ChecklistItem]) {
+        self.timestamp = timestamp
+        self.checklists = checklists.map(DailySessionChecklistPayload.init)
+    }
+}
+
+struct DailySessionChecklistPayload: Codable {
+    let title: String
+    let isCompleted: Bool
+
+    init(_ item: ChecklistItem) {
+        self.title = item.title
+        self.isCompleted = item.isCompleted
+    }
 }
 
 // 🔥 서버 수신용 DTO (String -> Array)
