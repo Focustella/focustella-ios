@@ -2,7 +2,7 @@
 import SwiftUI
 
 struct ActiveSessionView: View {
-    @ObservedObject var viewModel: DailySessionViewModel
+    @ObservedObject var viewModel: ActiveSessionViewModel
     @State private var newItemTitle: String = ""
     
     var body: some View {

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct AddTemplateView: View {
     @Environment(\.dismiss) var dismiss
-    @ObservedObject var viewModel: DailySessionViewModel
+    @ObservedObject var viewModel: TemplateViewModel
     
     @State private var templateName = ""
     @State private var newItemTitle = ""

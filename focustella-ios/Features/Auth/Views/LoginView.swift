@@ -12,6 +12,25 @@ struct LoginView: View {
     @AppStorage("userId") private var userId: String = ""
     @AppStorage("userSeed") private var userSeed: Int = 0
     
+    // 🔥 1. 안 쓰는 @State isGuestLoading 삭제 (viewModel.isLoading으로 통일)
+    @State private var devUUID: String = ""
+
+    @AppStorage("developerMode") private var developerMode: Bool = false
+    @AppStorage("serverIP") private var serverIP: String = ""
+
+    private var currentAPIURL: String {
+        if developerMode {
+            let customIP = serverIP.trimmingCharacters(in: .whitespaces)
+            if customIP.isEmpty || customIP == "localhost" {
+                return "http://localhost:8080/api/v1"
+            } else {
+                return "http://\(customIP):8080/api/v1"
+            }
+        } else {
+            return "https://api.focustella.com/api/v1"
+        }
+    }
+    
     var body: some View {
         ZStack {
             // 1. 웅장한 다크 우주 배경
@@ -53,9 +72,38 @@ struct LoginView: View {
                 
                 Spacer()
                 
+                if developerMode {
+                    VStack(spacing: 12) {
+                        TextField("서버 IP (예: 192.168.0.10)", text: $serverIP)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(10)
+                            .foregroundStyle(.white)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.system(size: 13, design: .monospaced))
+                        
+                        TextField("UUID 직접 입력 (비워두면 랜덤)", text: $devUUID)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(10)
+                            .foregroundStyle(.white)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.system(size: 13, design: .monospaced))
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 16)
+                }
+
                 // 🚀 4-A. 결제 전까지 임시로 사용할 더미 로그인 버튼
                 Button {
-                    
+                    // 🔥 2. 아까 뷰모델에 만든 임시 애플 로그인 함수 연결!
+                    viewModel.performMockAppleSignIn()
                 } label: {
                     HStack {
                         Image(systemName: "applelogo")
@@ -69,6 +117,7 @@ struct LoginView: View {
                     .background(Color.white)
                     .cornerRadius(100)
                 }
+                .disabled(viewModel.isLoading) // 🔥 로딩 중엔 중복 클릭 방지
                 .padding(.horizontal, 32)
                 .padding(.bottom, 16)
 
@@ -76,7 +125,8 @@ struct LoginView: View {
                 Button {
                     showGuestAlert = true
                 } label: {
-                    if viewModel.isGuestLoading {
+                    // 🔥 3. viewModel.isGuestLoading 을 viewModel.isLoading 으로 수정
+                    if viewModel.isLoading {
                         ProgressView()
                             .tint(.white.opacity(0.6))
                     } else {
@@ -86,23 +136,27 @@ struct LoginView: View {
                             .underline()
                     }
                 }
-                .disabled(viewModel.isGuestLoading)
+                .disabled(viewModel.isLoading) // 🔥 3. 여기도 수정
                 .padding(.bottom, 60)
-
-                /*
-                // 🔒 4-B. 나중에 개발자 계정 결제 후 주석 해제해서 사용할 진짜 버튼
-                SignInWithAppleButton(.signIn) { request in
-                    request.requestedScopes = [.fullName, .email]
-                } onCompletion: { result in
-                    handleAppleLoginResult(result)
-                }
-                .signInWithAppleButtonStyle(.white)
-                .frame(height: 56)
-                .cornerRadius(100)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 60)
-                */
             }
+            VStack {
+                            HStack {
+                                Spacer() // 오른쪽으로 밀어내기
+                                
+                                Button {
+                                    withAnimation(.spring()) {
+                                        developerMode.toggle()
+                                    }
+                                } label: {
+                                    Image(systemName: developerMode ? "ladybug.fill" : "ladybug")
+                                        .font(.system(size: 24))
+                                        .foregroundStyle(developerMode ? Color.yellow : Color.white.opacity(0.2))
+                                        .padding(.top, 50)
+                                        .padding(.trailing, 20)
+                                }
+                            }
+                            Spacer() // 위쪽으로 밀어내기
+                        }
         }
         .alert("게스트로 로그인", isPresented: $showGuestAlert) {
             Button("계속", role: .destructive) {
@@ -117,11 +171,18 @@ struct LoginView: View {
                 isAnimating = true
             }
         }
+        // 🔥 4. ViewModel에서 로그인이 완료되었다고 하면(isLoggedIn = true), View의 AppStorage도 켜줍니다!
+        .onChange(of: viewModel.isLoggedIn) { newValue in
+            if newValue {
+                self.isLoggedIn = true
+            }
+        }
     }
     
     // MARK: - 게스트 로그인
     private func performGuestLogin() async {
         do {
+            // 참고: LoginViewModel에 loginAsGuest() 함수가 구현되어 있어야 합니다!
             try await viewModel.loginAsGuest()
             accessToken = AuthSessionStore.accessToken ?? ""
             userId = UserDefaults.standard.string(forKey: "userId") ?? ""
@@ -200,8 +261,4 @@ private struct DenseStarFieldView: View {
         }
         .allowsHitTesting(false)
     }
-}
-
-#Preview {
-    LoginView()
 }
