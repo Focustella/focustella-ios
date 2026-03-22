@@ -1,13 +1,26 @@
 import Foundation
 
-final class AuthRemoteDataSource {
-    private let client: APIClient
+protocol AuthRemoteDataSource {
+    func authenticateAnonymously() async throws -> AuthResponseDTO
+    func signIn(email: String) async throws -> AuthResponseDTO
+    func updateNickname(nickname: String) async throws -> EmptyData
+}
 
-    init(client: APIClient = .shared) {
-        self.client = client
+final class AuthRemoteDataSourceImpl: AuthRemoteDataSource {
+    private let apiClient = APIClient.shared
+
+    func authenticateAnonymously() async throws -> AuthResponseDTO {
+        let endpoint = AuthEndpoint.anonymous
+        return try await apiClient.send(endpoint: endpoint)
     }
 
-    func authenticateAnonymously() async throws -> AnonymousAuthData {
-        try await client.send(AnonymousAuthData.self, endpoint: AuthEndpoint.anonymous)
+    func signIn(email: String) async throws -> AuthResponseDTO {
+        let endpoint = AuthEndpoint.signIn(email: email)
+        return try await apiClient.send(endpoint: endpoint)
+    }
+
+    func updateNickname(nickname: String) async throws -> EmptyData {
+        let endpoint = AuthEndpoint.updateNickname(nickname: nickname)
+        return try await apiClient.send(endpoint: endpoint)
     }
 }

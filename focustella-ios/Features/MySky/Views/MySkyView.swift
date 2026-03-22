@@ -174,6 +174,10 @@ struct MySkyView: View {
                                 if tutorialStep != .done && tutorialStep != .notStarted {
                                     TutorialOverlayView(
                                         step: $tutorialStep,
+                                                onSaveNickname: { newNickname in
+                                                    // 🔥 여기서 뷰모델의 통신 함수를 호출합니다!
+                                                    return await viewModel.saveNickname(newNickname)
+                                                },
                                         onStartSession: { startTutorialWarpSession(size: size) },
                                         onTriggerReward: { triggerTutorialRewardSequence(size: size) }, // 🔥 새로 생긴 콜백
                                         onFinish: {
@@ -189,24 +193,26 @@ struct MySkyView: View {
                 }
             }
             .onAppear {
-                canvasSize = size
-                guard !hasInitializedView else { return }
+                            canvasSize = size
+                            guard !hasInitializedView else { return }
 
-                hasInitializedView = true
-                if !hasSeenTutorial { tutorialStep = .welcome }
-                else { tutorialStep = .done }
+                            hasInitializedView = true
+                            
+                            // 🔥 수정: 튜토리얼의 첫 시작점을 닉네임 묻기로 변경합니다!
+                            if !hasSeenTutorial { tutorialStep = .askNickname }
+                            else { tutorialStep = .done }
 
-                showCTA = sessionStore.currentSession == nil
-                hasLaidOutCTA = true
-                parseDailyStars()
+                            showCTA = sessionStore.currentSession == nil
+                            hasLaidOutCTA = true
+                            parseDailyStars()
 
-                // Keep the first sky fetch on initial mount only so tab switches do not
-                // recreate the whole sky state and trigger another expensive re-render.
-                Task {
-                    await refreshSky()
-                    await syncLocalInsertedConstellations()
-                }
-            }
+                            // Keep the first sky fetch on initial mount only so tab switches do not
+                            // recreate the whole sky state and trigger another expensive re-render.
+                            Task {
+                                await refreshSky()
+                                await syncLocalInsertedConstellations()
+                            }
+                        }
             .onChange(of: size) { _, newValue in canvasSize = newValue }
             .onReceive(tick) { now in syncSession(now: now) }
             .onChange(of: scenePhase) { _, phase in

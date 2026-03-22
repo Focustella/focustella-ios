@@ -7,6 +7,7 @@ final class MySkyViewModel: ObservableObject {
     private let createFocusSessionUseCase: CreateFocusSessionUseCase
     private let saveFocusSessionUseCase: SaveFocusSessionUseCase
     private let constellationRepository: ConstellationRepository
+    private let updateNicknameUseCase = UpdateNicknameUseCase()
 
     init(
         fetchMySkyUseCase: FetchMySkyUseCase,
@@ -147,4 +148,19 @@ final class MySkyViewModel: ObservableObject {
         }
         return lhs.sessionId < rhs.sessionId
     }
+    
+    func saveNickname(_ nickname: String) async -> Bool {
+            do {
+                try await updateNicknameUseCase.execute(nickname: nickname)
+                
+                // 성공했다면 다신 튜토리얼 안 뜨게 UserDefaults 변경!
+                UserDefaults.standard.set(false, forKey: "needsTutorial")
+                print("✅ 닉네임 저장 및 튜토리얼 완료 처리 성공!")
+                return true
+                
+            } catch {
+                print("❌ 닉네임 저장 실패: \(error.localizedDescription)")
+                return false
+            }
+        }
 }

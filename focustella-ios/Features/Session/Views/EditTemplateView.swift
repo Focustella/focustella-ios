@@ -3,7 +3,7 @@ import SwiftUI
 
 struct EditTemplateView: View {
     @Environment(\.dismiss) var dismiss
-    @ObservedObject var viewModel: DailySessionViewModel
+    @ObservedObject var viewModel: TemplateViewModel
     
     let originalTemplate: ChecklistTemplate
     
@@ -11,7 +11,7 @@ struct EditTemplateView: View {
     @State private var items: [ChecklistItem]
     @State private var newItemTitle = ""
     
-    init(viewModel: DailySessionViewModel, template: ChecklistTemplate) {
+    init(viewModel: TemplateViewModel, template: ChecklistTemplate) {
         self.viewModel = viewModel
         self.originalTemplate = template
         _templateName = State(initialValue: template.name)

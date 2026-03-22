@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SessionHistoryView: View {
     @Environment(\.dismiss) var dismiss
-    @ObservedObject var viewModel: DailySessionViewModel
+    @ObservedObject var viewModel: SessionHistoryViewModel
     
     var body: some View {
         NavigationStack {
