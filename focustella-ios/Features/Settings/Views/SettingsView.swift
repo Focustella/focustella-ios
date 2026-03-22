@@ -4,6 +4,7 @@ struct SettingsView: View {
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
+    @AppStorage("mySkyBackgroundVariant") private var mySkyBackgroundVariant: MySkyBackgroundVariant = .focusStar
 
     var body: some View {
         Form {
@@ -22,6 +23,18 @@ struct SettingsView: View {
                 Text("성능 설정")
             } footer: {
                 Text("활성화 시 별 반짝임과 별자리 선분 반짝임이 켜집니다. 배터리/발열 사용량이 증가할 수 있습니다.")
+            }
+
+            Section {
+                Picker("MySky 배경", selection: $mySkyBackgroundVariant) {
+                    ForEach(MySkyBackgroundVariant.allCases, id: \.self) { variant in
+                        Text(variant.title).tag(variant)
+                    }
+                }
+            } header: {
+                Text("배경")
+            } footer: {
+                Text("MySky에서 데모 스타일 배경과 이전 밤하늘 배경 중 하나를 선택할 수 있습니다.")
             }
 
             Section {

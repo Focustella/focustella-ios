@@ -15,6 +15,7 @@ struct MainTabView: View {
             NavigationStack {
                 MySkyView()
                     .toolbar(.hidden, for: .navigationBar)
+                    .ignoresSafeArea(.container, edges: [.top])
             }
             .tag(Tab.mySky)
             .tabItem {

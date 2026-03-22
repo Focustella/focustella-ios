@@ -19,6 +19,7 @@ struct MySkyView: View {
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("starStyle") private var starStyle: StarAppearanceStyle = .realistic
+    @AppStorage("mySkyBackgroundVariant") private var backgroundVariant: MySkyBackgroundVariant = .focusStar
     @AppStorage("userId") private var userId: String = ""
     @AppStorage("userSeed") private var userSeed: Int = 0
     
@@ -74,7 +75,6 @@ struct MySkyView: View {
     private let completionCameraMoveDuration: TimeInterval = 1.05
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    private let ambientStars: [AmbientStar] = AmbientStar.makeSeeded(count: 90, seed: 20260308)
     private let fallbackLocalUserId = "local-user"
 
     private var isSkyInteractionLocked: Bool {
@@ -84,25 +84,16 @@ struct MySkyView: View {
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size
+            let ctaBottomInset = max(36, proxy.safeAreaInsets.bottom + 94)
             
             ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.05, green: 0.1, blue: 0.24),
-                        Color(red: 0.04, green: 0.06, blue: 0.16),
-                        Color(red: 0.02, green: 0.03, blue: 0.08)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+                MySkyBackgroundLayer(
+                    canvasSize: size,
+                    safeAreaInsets: proxy.safeAreaInsets,
+                    scale: scale,
+                    offset: offset,
+                    variant: backgroundVariant
                 )
-                .ignoresSafeArea()
-                
-                Circle().fill(Color(red: 0.25, green: 0.38, blue: 0.78).opacity(0.2))
-                    .frame(width: size.width * 0.9, height: size.width * 0.9).position(x: size.width * 0.2, y: size.height * 0.16).blur(radius: 70).allowsHitTesting(false)
-                
-                Circle().fill(Color(red: 0.36, green: 0.3, blue: 0.66).opacity(0.14))
-                    .frame(width: size.width * 1.0, height: size.width * 1.0).position(x: size.width * 0.82, y: size.height * 0.84).blur(radius: 78).allowsHitTesting(false)
-                
                 interactiveSkyLayer(size: size)
                 
                 if let session = sessionStore.currentSession, let constellation = constellationById(session.constellationId) {
@@ -270,7 +261,7 @@ struct MySkyView: View {
                         Text("집중 세션 시작").font(.headline).foregroundStyle(.black).frame(width: 220, height: 48).background(Color.white, in: Capsule())
                     }.buttonStyle(.plain)
                 }
-                .padding(.bottom, 36)
+                .padding(.bottom, ctaBottomInset)
                 // 🔥 튜토리얼 중일 땐 하단 버튼들 숨김
                 .opacity((showCTA && sessionStore.currentSession == nil && tutorialStep == .done) ? 1 : 0)
                 .allowsHitTesting(showCTA && sessionStore.currentSession == nil && tutorialStep == .done)
@@ -781,29 +772,6 @@ struct MySkyView: View {
             for edgeIndex in constellation.edges.indices where !usedEdges.contains(edgeIndex) { order.append(edgeIndex) }
         }
         return order
-    }
-
-    @ViewBuilder
-    private func ambientStarLayer(size: CGSize) -> some View {
-        let shouldAnimate = highPerformanceMode && !accessibility.isReduceMotionEnabled
-        TimelineView(.periodic(from: .now, by: shouldAnimate ? 1.0 / 6.0 : 1.2)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            ZStack {
-                ForEach(ambientStars) { star in
-                    let pulse = shouldAnimate ? (sin(t * 1.1 + star.phase) + 1) / 2 : 0.4
-                    let opacity = shouldAnimate ? (star.baseOpacity + pulse * 0.25) : (star.baseOpacity * 0.85)
-                    let glow = shouldAnimate ? (star.baseGlow + CGFloat(pulse) * 3.0) : (star.baseGlow * 0.6)
-
-                    ZStack {
-                        Circle().fill(star.color.opacity(opacity)).frame(width: star.size, height: star.size)
-                        if shouldAnimate && star.hasFlare {
-                            AmbientStarFlare(length: star.size * (2.4 + CGFloat(pulse)), thickness: max(0.3, star.size * 0.12), color: star.color.opacity(opacity * 0.4))
-                                .rotationEffect(.degrees(star.flareAngle))
-                        }
-                    }.shadow(color: star.color.opacity(0.5), radius: glow).position(x: star.x * size.width, y: star.y * size.height)
-                }
-            }
-        }.allowsHitTesting(false)
     }
 
     @ViewBuilder
