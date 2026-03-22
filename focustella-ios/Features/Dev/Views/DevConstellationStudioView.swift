@@ -18,6 +18,12 @@ struct DevConstellationStudioView: View {
     var body: some View {
         VStack(spacing: 16) {
             Form {
+                Section("데모") {
+                    NavigationLink("Focus Star 디자인 데모") {
+                        FocusStarDesignDemoView()
+                    }
+                }
+
                 Section("별자리 정보") {
                     TextField("이름", text: $name)
                     Toggle("루프 닫기(마지막-처음 연결)", isOn: $closeLoop)

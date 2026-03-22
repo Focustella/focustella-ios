@@ -2,6 +2,14 @@ import CoreGraphics
 import Foundation
 
 enum SkyMapper {
+    static func focusSessionId(_ sessionId: String) -> UUID {
+        deterministicUUID(input: "focus-session|\(sessionId)")
+    }
+
+    static func parseISO8601Date(_ value: String) -> Date? {
+        parseDate(value)
+    }
+
     static func mapConstellation(_ dto: ConstellationDTO) -> Constellation {
         let id = deterministicUUID(input: "constellation|\(dto.id)")
         let stars = dto.stars.map {
@@ -42,7 +50,7 @@ enum SkyMapper {
         )
 
         return FocusSession(
-            id: deterministicUUID(input: "focus-session|\(dto.sessionId)"),
+            id: focusSessionId(dto.sessionId),
             serverSessionId: dto.sessionId,
             serverConstellationId: dto.constellationId,
             startedAt: startedAt,
@@ -56,7 +64,12 @@ enum SkyMapper {
     }
 
     static func mapDailyStars(seed: Int64, dailyStars: [SkyDailyStarDTO]) -> [CGPoint] {
-        dailyStars.map { dailyStarPosition(seed: seed, sessionId: $0.sessionId) }
+        var generator = SeededUnitGenerator(seed: pureSeed(seed))
+        return dailyStars.map { _ in
+            let x = 0.15 + generator.nextUnit() * 0.7
+            let y = 0.1 + generator.nextUnit() * 0.4
+            return CGPoint(x: x, y: y)
+        }
     }
 
     private static func normalizedCoordinate(_ value: Double) -> CGFloat {
@@ -64,18 +77,9 @@ enum SkyMapper {
         return CGFloat((clamped + 100.0) / 200.0)
     }
 
-    private static func dailyStarPosition(seed: Int64, sessionId: String) -> CGPoint {
-        var state = fnv1a64("\(seed)|\(sessionId)")
-
-        func nextUnit() -> CGFloat {
-            state = state &* 6364136223846793005 &+ 1442695040888963407
-            let ratio = Double(state & 0xFFFF_FFFF) / Double(UInt32.max)
-            return CGFloat(ratio)
-        }
-
-        let x = 0.15 + nextUnit() * 0.7
-        let y = 0.1 + nextUnit() * 0.4
-        return CGPoint(x: x, y: y)
+    private static func pureSeed(_ seed: Int64) -> UInt64 {
+        let raw = UInt64(bitPattern: seed)
+        return raw == 0 ? 0x9E37 : raw
     }
 
     private static func deterministicUUID(input: String) -> UUID {
@@ -115,5 +119,19 @@ enum SkyMapper {
         fallback.timeZone = TimeZone(secondsFromGMT: 0)
         fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         return fallback.date(from: value)
+    }
+}
+
+private struct SeededUnitGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        self.state = seed
+    }
+
+    mutating func nextUnit() -> CGFloat {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        let ratio = Double(state & 0xFFFF_FFFF) / Double(UInt32.max)
+        return CGFloat(ratio)
     }
 }

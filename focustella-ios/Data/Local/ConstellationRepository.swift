@@ -8,22 +8,22 @@ final class ConstellationRepository {
         self.service = service
     }
 
-    func fetchSessionConstellation(durationSeconds: Int, occupied: [Constellation], userId: String) async -> Constellation? {
+    func fetchSessionConstellation(durationSeconds: Int, occupied: [Constellation], userId: String, randomSeed: Int64) async -> Constellation? {
         let payloads = await service.fetchConstellationCandidates(durationSeconds: durationSeconds, userId: userId)
         for payload in payloads {
-            if let constellation = place(payload: payload, occupied: occupied) {
+            if let constellation = place(payload: payload, occupied: occupied, randomSeed: randomSeed) {
                 return constellation
             }
         }
         return nil
     }
 
-    func fetchUserConstellations(userId: String, occupied: [Constellation]) async -> [Constellation] {
+    func fetchUserConstellations(userId: String, occupied: [Constellation], randomSeed: Int64) async -> [Constellation] {
         let payloads = await service.fetchConstellationsForUser(userId: userId)
         var placed: [Constellation] = []
         var occupiedAll = occupied
         for payload in payloads {
-            if let constellation = place(payload: payload, occupied: occupiedAll) {
+            if let constellation = place(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
                 placed.append(constellation)
                 occupiedAll.append(constellation)
             }
@@ -31,13 +31,13 @@ final class ConstellationRepository {
         return placed
     }
 
-    func fetchCustomConstellations(userId: String, occupied: [Constellation]) async -> [Constellation] {
+    func fetchCustomConstellations(userId: String, occupied: [Constellation], randomSeed: Int64) async -> [Constellation] {
         let payloads = await service.fetchCustomConstellationsForUser(userId: userId)
         var placed: [Constellation] = []
         var occupiedAll = occupied
 
         for payload in payloads {
-            let constellation = place(payload: payload, occupied: occupiedAll) ?? place(payload: payload, occupied: [])
+            let constellation = place(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) ?? place(payload: payload, occupied: [], randomSeed: randomSeed)
             guard let constellation else { continue }
             placed.append(constellation)
             occupiedAll.append(constellation)
@@ -46,12 +46,12 @@ final class ConstellationRepository {
         return placed
     }
 
-    func fetchInitialPreviewConstellations(occupied: [Constellation], limit: Int = 3) async -> [Constellation] {
+    func fetchInitialPreviewConstellations(occupied: [Constellation], randomSeed: Int64, limit: Int = 3) async -> [Constellation] {
         let payloads = await service.fetchBasePreviewConstellations(limit: limit)
         var placed: [Constellation] = []
         var occupiedAll = occupied
         for payload in payloads {
-            if let constellation = place(payload: payload, occupied: occupiedAll) {
+            if let constellation = place(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
                 placed.append(constellation)
                 occupiedAll.append(constellation)
             }
@@ -59,17 +59,18 @@ final class ConstellationRepository {
         return placed
     }
 
-    func fetchInsertedUserConstellation(id: String, userId: String, occupied: [Constellation]) async -> Constellation? {
+    func fetchInsertedUserConstellation(id: String, userId: String, occupied: [Constellation], randomSeed: Int64) async -> Constellation? {
         guard let payload = await service.fetchCustomConstellation(id: id, userId: userId) else {
             return nil
         }
-        return place(payload: payload, occupied: occupied) ?? place(payload: payload, occupied: [])
+        return place(payload: payload, occupied: occupied, randomSeed: randomSeed) ?? place(payload: payload, occupied: [], randomSeed: randomSeed)
     }
 
     func placeRemoteConstellation(
         template: ConstellationDTO,
         placementKey: String,
-        occupied: [Constellation]
+        occupied: [Constellation],
+        randomSeed: Int64
     ) -> Constellation? {
         let payload = ServerConstellationPayload(
             id: "remote-\(placementKey)-\(template.id)",
@@ -87,7 +88,7 @@ final class ConstellationRepository {
             serverId: template.id
         )
 
-        return place(payload: payload, occupied: occupied) ?? place(payload: payload, occupied: [])
+        return place(payload: payload, occupied: occupied, randomSeed: randomSeed) ?? place(payload: payload, occupied: [], randomSeed: randomSeed)
     }
 
     func insertUserConstellation(
@@ -141,7 +142,7 @@ final class ConstellationRepository {
         return payload.id
     }
 
-    private func place(payload: ServerConstellationPayload, occupied: [Constellation]) -> Constellation? {
+    private func place(payload: ServerConstellationPayload, occupied: [Constellation], randomSeed: Int64) -> Constellation? {
         let existingMeta = occupied.map { constellation in
             let points = constellation.stars.map { CGPoint(x: $0.x, y: $0.y) }
             let rep = constellation.representativePoint
@@ -149,7 +150,7 @@ final class ConstellationRepository {
             return OccupiedConstellation(rep: rep, radius: radius, hull: paddedHull(convexHull(points), padding: 0.02))
         }
 
-        var rng = SeededGenerator(seed: UInt64(abs(payload.id.hashValue)) + 991)
+        var rng = SeededGenerator(seed: pureSeed(randomSeed))
         let baseAngle = rng.nextCGFloat(in: 0...(CGFloat.pi * 2))
         let baseRadius = rng.nextCGFloat(in: 0.12...0.42)
         let radiusSpread = rng.nextCGFloat(in: 0.08...0.18)
@@ -238,6 +239,11 @@ final class ConstellationRepository {
         let hash = abs(input.hashValue)
         let hex = String(format: "%032x", hash)
         return "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))"
+    }
+
+    private func pureSeed(_ seed: Int64) -> UInt64 {
+        let raw = UInt64(bitPattern: seed)
+        return raw == 0 ? 0x9E37 : raw
     }
 
     private func isInsideBounds(_ points: [CGPoint]) -> Bool {

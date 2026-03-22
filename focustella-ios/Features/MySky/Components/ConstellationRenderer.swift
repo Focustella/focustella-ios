@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConstellationRenderer: View {
     let constellation: Constellation
+    let coordinateMapper: MySkyCoordinateMapper
     let discoveredStarCount: Int
     let showEdges: Bool
     let edgeProgress: CGFloat
@@ -12,96 +13,107 @@ struct ConstellationRenderer: View {
     var visibleEdgeIndices: Set<Int>? = nil
     var edgeVisibilityOverrides: [Int: CGFloat]? = nil
     var starStyle: StarAppearanceStyle = .realistic
+    var activeBirthEffect: StarBirthEffectState? = nil
 
     var body: some View {
         let shouldAnimate = highPerformanceMode && !reduceMotion
         TimelineView(.periodic(from: .now, by: shouldAnimate ? 1.0 / 8.0 : 1.2)) { context in
-            GeometryReader { proxy in
-                let size = proxy.size
-                let time = context.date.timeIntervalSinceReferenceDate
-                let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { ($0.id, worldPoint(fromNormalized: CGPoint(x: $0.x, y: $0.y), size: size)) })
-                let constellationBase = basePaletteForConstellation()
+            let mapper = coordinateMapper
+            let time = context.date.timeIntervalSinceReferenceDate
+            let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { ($0.id, mapper.worldPoint(for: $0)) })
+            let constellationBase = basePaletteForConstellation()
+            let birthSegments = activeBirthEffect?.connectionPairs.compactMap { pair -> StarBirthSegment? in
+                guard let from = pointsById[pair.fromStarId], let to = pointsById[pair.toStarId] else { return nil }
+                return StarBirthSegment(from: from, to: to)
+            } ?? []
 
-                ZStack {
-                    if showEdges {
-                        let edgeCount = max(1, constellation.edges.count)
-                        let reveal = CGFloat(edgeCount) * max(0, min(1, edgeProgress))
-                        let edgePulse = shouldAnimate ? (sin(time * 1.0) + 1) / 2 : 0.35
-                        let edgeOpacity = shouldAnimate ? (0.15 + 0.14 * edgePulse) : 0.18
-                        let edgeGlow = shouldAnimate ? (1.7 + CGFloat(edgePulse) * 1.9) : 1.6
-                        let edgeBaseColor = constellationBase.color
-                        let orderedIndices = edgeRevealOrder ?? Array(constellation.edges.indices)
+            ZStack {
+                if let activeBirthEffect, !birthSegments.isEmpty {
+                    RendererBirthConnectionsView(
+                        connectionSegments: birthSegments,
+                        reduceMotion: reduceMotion
+                    )
+                    .id("connections-\(activeBirthEffect.token)")
+                }
 
-                        ForEach(Array(orderedIndices.enumerated()), id: \.offset) { order, edgeIndex in
-                            let isVisible = visibleEdgeIndices?.contains(edgeIndex) ?? true
-                            if constellation.edges.indices.contains(edgeIndex), isVisible {
-                                let local = min(1, max(0, reveal - CGFloat(order)))
-                                if local > 0 {
-                                    let eased = local * local * (3 - 2 * local)
-                                    let visibility = edgeVisibilityOverrides?[edgeIndex] ?? 1
-                                    if visibility > 0 {
-                                        let edge = constellation.edges[edgeIndex]
-                                        if let from = pointsById[edge.from], let to = pointsById[edge.to] {
-                                            Path { path in
-                                                path.move(to: from)
-                                                path.addLine(to: to)
-                                            }
-                                            .stroke(
-                                                edgeBaseColor.opacity(edgeOpacity * eased * visibility),
-                                                style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
-                                            )
-                                            .shadow(
-                                                color: edgeBaseColor.opacity(edgeOpacity * eased * visibility * 0.85),
-                                                radius: edgeGlow * eased
-                                            )
+                if showEdges {
+                    let edgeCount = max(1, constellation.edges.count)
+                    let reveal = CGFloat(edgeCount) * max(0, min(1, edgeProgress))
+                    let edgePulse = shouldAnimate ? (sin(time * 1.0) + 1) / 2 : 0.35
+                    let edgeOpacity = shouldAnimate ? (0.15 + 0.14 * edgePulse) : 0.18
+                    let edgeGlow = shouldAnimate ? (1.7 + CGFloat(edgePulse) * 1.9) : 1.6
+                    let edgeBaseColor = constellationBase.color
+                    let orderedIndices = edgeRevealOrder ?? Array(constellation.edges.indices)
+
+                    ForEach(Array(orderedIndices.enumerated()), id: \.offset) { order, edgeIndex in
+                        let isVisible = visibleEdgeIndices?.contains(edgeIndex) ?? true
+                        if constellation.edges.indices.contains(edgeIndex), isVisible {
+                            let local = min(1, max(0, reveal - CGFloat(order)))
+                            if local > 0 {
+                                let eased = local * local * (3 - 2 * local)
+                                let visibility = edgeVisibilityOverrides?[edgeIndex] ?? 1
+                                if visibility > 0 {
+                                    let edge = constellation.edges[edgeIndex]
+                                    if let from = pointsById[edge.from], let to = pointsById[edge.to] {
+                                        Path { path in
+                                            path.move(to: from)
+                                            path.addLine(to: to)
                                         }
+                                        .stroke(
+                                            edgeBaseColor.opacity(edgeOpacity * eased * visibility),
+                                            style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
+                                        )
+                                        .shadow(
+                                            color: edgeBaseColor.opacity(edgeOpacity * eased * visibility * 0.85),
+                                            radius: edgeGlow * eased
+                                        )
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    ForEach(Array(constellation.stars.enumerated()), id: \.element.id) { index, star in
-                        let discovered = index < discoveredStarCount
-                        let sparkle = sparklingIndices.contains(index)
-                        let position = worldPoint(fromNormalized: CGPoint(x: star.x, y: star.y), size: size)
-                        let phaseOffset = Double(star.x * 30 + star.y * 15)
-                        let palette = starPalette(for: index, base: constellationBase)
+                ForEach(Array(constellation.stars.enumerated()), id: \.element.id) { index, star in
+                    let discovered = index < discoveredStarCount
+                    let sparkle = sparklingIndices.contains(index)
+                    let isBirthStar = activeBirthEffect?.starId == star.id
+                    let position = mapper.worldPoint(for: star)
+                    let phaseOffset = Double(star.x * 30 + star.y * 15)
+                    let palette = starPalette(for: index, base: constellationBase)
 
-                        if discovered || sparkle {
+                    if discovered || sparkle || isBirthStar {
+                        ZStack {
+                            if isBirthStar, let activeBirthEffect {
+                                RendererRippleBurstView(reduceMotion: reduceMotion)
+                                    .id("ripple-\(activeBirthEffect.token)")
+                                RendererStarBirthIgnitionView(reduceMotion: reduceMotion)
+                                    .id("ignition-\(activeBirthEffect.token)")
+                            }
+
                             TwinklingStarNode(
-                                position: position,
+                                position: nil,
                                 size: 11,
                                 phaseOffset: phaseOffset,
                                 color: palette.color,
                                 baseRGB: palette.rgb,
                                 time: time,
                                 reduceMotion: reduceMotion,
-                                boost: sparkle,
+                                boost: sparkle || isBirthStar,
                                 isAnimated: shouldAnimate,
-                                hasFlare: shouldAnimate && (sparkle || index.isMultiple(of: 6)),
+                                hasFlare: shouldAnimate && (sparkle || isBirthStar || index.isMultiple(of: 6)),
                                 currentStyle: starStyle
                             )
-                            .opacity(1.0)
-                            .allowsHitTesting(false)
+                            .opacity((discovered || sparkle) ? 1.0 : 0.001)
                         }
+                        .position(position)
+                        .allowsHitTesting(false)
                     }
                 }
             }
+            .frame(width: mapper.canvasSize.width, height: mapper.canvasSize.height)
         }
         .allowsHitTesting(false)
-    }
-
-    private func worldPoint(fromNormalized point: CGPoint, size: CGSize) -> CGPoint {
-        let side = min(size.width, size.height)
-        let origin = CGPoint(
-            x: (size.width - side) / 2,
-            y: (size.height - side) / 2
-        )
-        return CGPoint(
-            x: origin.x + point.x * side,
-            y: origin.y + point.y * side
-        )
     }
 
     private func starPalette(for index: Int, base: StarPalette) -> StarPalette {
@@ -127,8 +139,198 @@ struct ConstellationRenderer: View {
     }
 }
 
+private struct RendererRippleBurstView: View {
+    let reduceMotion: Bool
+    @State private var progress: CGFloat = 0.0
+    private let coreColor = Color(white: 0.95)
+    private let glowColor = Color(red: 0.78, green: 0.92, blue: 1.0)
+
+    var body: some View {
+        ZStack {
+            if !reduceMotion {
+                Circle()
+                    .stroke(coreColor.opacity(0.7 * (1 - progress)), lineWidth: 15 * (1 - progress * 0.5))
+                    .frame(width: 20 + (progress * 100), height: 20 + (progress * 100))
+                    .blur(radius: 10)
+                    .padding(20)
+                Circle()
+                    .stroke(glowColor.opacity(0.5 * (1 - progress)), lineWidth: 25 * (1 - progress * 0.5))
+                    .frame(width: 10 + (progress * 140), height: 10 + (progress * 140))
+                    .blur(radius: 20)
+                    .padding(30)
+                Circle()
+                    .stroke(glowColor.opacity(0.3 * (1 - progress)), lineWidth: 40 * (1 - progress * 0.8))
+                    .frame(width: 5 + (progress * 180), height: 5 + (progress * 180))
+                    .blur(radius: 40)
+                    .padding(50)
+            }
+        }
+        .frame(width: 300, height: 300)
+        .onAppear {
+            withAnimation(.easeOut(duration: 2.0)) {
+                progress = 1.0
+            }
+        }
+    }
+}
+
+private struct RendererBirthConnectionsView: View {
+    let connectionSegments: [StarBirthSegment]
+    let reduceMotion: Bool
+    @State private var connectionPulse: CGFloat = 0
+    private let style = StarBirthEffectStyle.minimal
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(connectionSegments.enumerated()), id: \.offset) { index, segment in
+                let itemDelay = Double(index) * 0.03
+                let local = max(0, min(1, connectionPulse - CGFloat(itemDelay / max(0.001, style.connectionResponseDuration))))
+                let eased = local * local * (3 - 2 * local)
+                Path { path in
+                    path.move(to: segment.from)
+                    path.addLine(to: segment.to)
+                }
+                .stroke(
+                    Color.white.opacity(0.22 * eased),
+                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+                )
+                .shadow(color: Color.white.opacity(0.18 * eased), radius: 2.4 * eased)
+            }
+        }
+        .onAppear {
+            if reduceMotion {
+                connectionPulse = 1
+            } else {
+                withAnimation(.easeOut(duration: style.connectionResponseDuration).delay(style.preludeDuration + style.condenseDuration + 0.1)) {
+                    connectionPulse = 1
+                }
+            }
+        }
+    }
+}
+
+private struct RendererStarBirthIgnitionView: View {
+    let reduceMotion: Bool
+    private let style = StarBirthEffectStyle.minimal
+    @State private var prelude: CGFloat = 0
+    @State private var condense: CGFloat = 0
+    @State private var birth: CGFloat = 0
+    @State private var settle: CGFloat = 0
+    @State private var masterOpacity: CGFloat = 1
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(0.16 * prelude))
+                .frame(width: 72, height: 72)
+                .blur(radius: 20 * prelude)
+
+            ForEach(0..<style.particleCount, id: \.self) { index in
+                let angle = (Double(index) / Double(style.particleCount)) * .pi * 2
+                let swirl = reduceMotion ? 0 : Double(condense) * 0.9
+                let radius = (28 - (24 * condense))
+                let x = cos(angle + swirl) * radius
+                let y = sin(angle + swirl) * radius
+
+                Circle()
+                    .fill(Color.white.opacity(0.18 + 0.42 * (1 - condense)))
+                    .frame(width: reduceMotion ? 2.8 : 3.6, height: reduceMotion ? 2.8 : 3.6)
+                    .blur(radius: reduceMotion ? 0.5 : 1.2)
+                    .offset(x: x, y: y)
+            }
+
+            Circle()
+                .fill(Color.white.opacity(0.22 + 0.62 * condense))
+                .frame(width: 12, height: 12)
+                .scaleEffect(0.6 + 0.5 * birth)
+                .blur(radius: 1.6 + (4.0 * condense))
+
+            Group {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.75 * birth), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: 32, height: 1)
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.75 * birth), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 1, height: 32)
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.45 * birth), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: 22, height: 1)
+                    .rotationEffect(.degrees(45))
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.45 * birth), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: 22, height: 1)
+                    .rotationEffect(.degrees(-45))
+            }
+            .blur(radius: 0.6)
+
+            Circle()
+                .stroke(Color.white.opacity(0.22 * birth), lineWidth: 1.2)
+                .frame(width: style.ringStartRadius, height: style.ringStartRadius)
+                .scaleEffect(1 + (style.ringEndRadius / max(1, style.ringStartRadius) * birth))
+                .opacity(1 - birth)
+
+            ForEach(0..<3, id: \.self) { index in
+                let baseAngle = (Double(index) / 3.0) * .pi * 2
+                let drift = CGFloat(12 + (index * 4)) * settle
+                Circle()
+                    .fill(Color.white.opacity(0.24 * (1 - settle)))
+                    .frame(width: 2.6, height: 2.6)
+                    .offset(
+                        x: cos(baseAngle) * drift,
+                        y: sin(baseAngle) * drift
+                    )
+                    .blur(radius: 0.8)
+            }
+        }
+        .scaleEffect(style.effectScale, anchor: .center)
+        .opacity(masterOpacity)
+        .onAppear {
+            withAnimation(.easeOut(duration: style.preludeDuration)) {
+                prelude = 1
+            }
+            withAnimation(.easeInOut(duration: style.condenseDuration).delay(style.preludeDuration * 0.5)) {
+                condense = 1
+            }
+            withAnimation(.interpolatingSpring(stiffness: 210, damping: 20).delay(style.preludeDuration + style.condenseDuration * 0.55)) {
+                birth = 1
+            }
+            withAnimation(.easeOut(duration: style.settleDuration).delay(style.preludeDuration + style.condenseDuration + style.birthDuration * 0.35)) {
+                settle = 1
+            }
+            let fadeDelay = style.preludeDuration + style.condenseDuration + style.birthDuration + style.settleDuration + style.holdDuration
+            withAnimation(.easeOut(duration: style.fadeOutDuration).delay(fadeDelay)) {
+                masterOpacity = 0
+            }
+        }
+    }
+}
+
 private struct TwinklingStarNode: View {
-    let position: CGPoint
+    let position: CGPoint?
     let size: CGFloat
     let phaseOffset: Double
     let color: Color
@@ -157,7 +359,7 @@ private struct TwinklingStarNode: View {
         let flareOpacity = reduceMotion ? 0.14 : (0.18 + 0.2 * flicker) * (boost ? 1.12 : 1.0)
         let flareLength = size * (boost ? 2.8 : 2.2) * (0.9 + pulse * 0.3)
 
-        ZStack {
+        let content = ZStack {
             // Diffraction-like spikes for bright stars.
             if hasFlare {
                 StarFlare(
@@ -178,7 +380,12 @@ private struct TwinklingStarNode: View {
         }
         .shadow(color: glowColor, radius: glow)
         .opacity(opacity)
-        .position(position)
+
+        if let position {
+            content.position(position)
+        } else {
+            content
+        }
     }
     
     @ViewBuilder

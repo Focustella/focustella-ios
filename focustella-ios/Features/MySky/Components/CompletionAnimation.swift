@@ -11,18 +11,22 @@ struct CompletionAnimation: View {
     @State private var edgeProgress: CGFloat = 0
 
     var body: some View {
-        ConstellationRenderer(
-            constellation: constellation,
-            discoveredStarCount: constellation.starCount,
-            showEdges: true,
-            edgeProgress: edgeProgress,
-            reduceMotion: reduceMotion,
-            highPerformanceMode: highPerformanceMode,
-            sparklingIndices: sparklingIndices,
-            edgeRevealOrder: edgeRevealOrder
-        )
-        .task {
-            await runSequence()
+        GeometryReader { proxy in
+            ConstellationRenderer(
+                constellation: constellation,
+                coordinateMapper: MySkyCoordinateMapper(canvasSize: proxy.size),
+                discoveredStarCount: constellation.starCount,
+                showEdges: true,
+                edgeProgress: edgeProgress,
+                reduceMotion: reduceMotion,
+                highPerformanceMode: highPerformanceMode,
+                sparklingIndices: sparklingIndices,
+                edgeRevealOrder: edgeRevealOrder,
+                activeBirthEffect: nil
+            )
+            .task {
+                await runSequence()
+            }
         }
     }
 
