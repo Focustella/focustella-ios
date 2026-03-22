@@ -2,13 +2,16 @@
 import SwiftUI
 
 struct TemplateSelectionView: View {
-    @ObservedObject var viewModel: DailySessionViewModel
+    // 🔥 역할에 맞게 두 개의 뷰모델을 모두 받습니다!
+    @ObservedObject var templateViewModel: TemplateViewModel
+    @ObservedObject var activeViewModel: ActiveSessionViewModel
+    
     @Binding var showingAddTemplate: Bool
     @Binding var templateToEdit: ChecklistTemplate?
     
     var body: some View {
         Group {
-            if viewModel.templates.isEmpty {
+            if templateViewModel.templates.isEmpty {
                 VStack(spacing: 24) {
                     Image(systemName: "doc.text.magnifyingglass")
                         .font(.system(size: 60))
@@ -26,7 +29,8 @@ struct TemplateSelectionView: View {
                     
                     VStack(spacing: 12) {
                         Button(action: {
-                            withAnimation { viewModel.startEmptySession() }
+                            // 🔥 빈 세션 시작은 ActiveViewModel에게 시킵니다!
+                            withAnimation { activeViewModel.startEmptySession() }
                         }) {
                             Text("템플릿 없이 바로 시작")
                                 .frame(maxWidth: .infinity)
@@ -53,13 +57,13 @@ struct TemplateSelectionView: View {
             } else {
                 List {
                     Section(header: Text("내 템플릿")) {
-                        ForEach(viewModel.templates) { template in
+                        ForEach(templateViewModel.templates) { template in
                             DisclosureGroup(
                                 isExpanded: Binding(
-                                    get: { viewModel.expandedTemplateID == template.id },
+                                    get: { templateViewModel.expandedTemplateID == template.id },
                                     set: { isExpanded in
                                         withAnimation(.easeInOut(duration: 0.25)) {
-                                            viewModel.expandedTemplateID = isExpanded ? template.id : nil
+                                            templateViewModel.expandedTemplateID = isExpanded ? template.id : nil
                                         }
                                     }
                                 )
@@ -86,8 +90,9 @@ struct TemplateSelectionView: View {
                                         .tint(.secondary)
                                         
                                         Button(action: {
+                                            // 🔥 템플릿으로 세션 시작도 ActiveViewModel에게 시킵니다!
                                             withAnimation {
-                                                viewModel.startSession(with: template)
+                                                activeViewModel.startSession(with: template)
                                             }
                                         }) {
                                             Text("진행")
@@ -114,7 +119,7 @@ struct TemplateSelectionView: View {
                             }
                             .tint(.gray)
                         }
-                        .onDelete(perform: viewModel.deleteTemplate)
+                        .onDelete(perform: templateViewModel.deleteTemplate)
                     }
                 }
                 .listStyle(.insetGrouped)
