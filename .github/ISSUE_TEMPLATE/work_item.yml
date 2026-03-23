@@ -1,0 +1,83 @@
+name: 🧹 Chore
+description: 리팩터링, 유지보수, 문서화, 기술 부채 정리 작업을 등록합니다.
+title: "[Chore] "
+labels:
+  - chore
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🧹 Chore Issue
+        명확한 작업 단위가 필요한 이슈 템플릿입니다.  
+        구현보다 정리, 개선, 이관, 문서화 성격의 작업에 적합합니다.
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 🧩 배경
+      description: 왜 이 작업이 필요한지, 현재 어떤 맥락인지 적어주세요.
+      placeholder: 예) README 구조와 실제 코드 배치가 달라 신규 작업자가 진입할 때 혼선이 있습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: 🎯 작업 목표
+      description: 이 이슈에서 끝내야 하는 결과를 적어주세요.
+      placeholder: 예) UserRepository 구현을 올바른 계층으로 이동하고 문서 구조와 일치시킨다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: 🗂️ 작업 항목
+      description: 실제 구현 단위로 나눠 작성해주세요.
+      placeholder: |
+        - [ ] 파일 이동
+        - [ ] import 및 참조 정리
+        - [ ] README 갱신
+        - [ ] 빌드 검증
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: ✅ 완료 기준
+      description: 작업 종료를 판단할 수 있는 기준을 적어주세요.
+      placeholder: |
+        - [ ] 구조 위반 파일이 제거된다.
+        - [ ] 빌드가 통과한다.
+        - [ ] 문서와 실제 구조가 일치한다.
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk
+    attributes:
+      label: ⚠️ 리스크 / 주의사항
+      description: 영향 범위, 회귀 위험, 연관된 기능을 적어주세요.
+      placeholder: |
+        - 영향 파일:
+        - 회귀 가능성:
+        - 추가 확인 필요 사항:
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 📎 참고 자료
+      description: 관련 PR, 이슈, 문서, 로그, 디자인 링크 등을 적어주세요.
+      placeholder: 링크나 문서 경로를 붙여주세요.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: ☑️ 체크리스트
+      options:
+        - label: 작업 범위와 완료 기준을 명확히 작성했습니다.
+        - label: 영향 범위와 리스크를 검토했습니다.
+        - label: 관련 자료 또는 선행 이슈를 연결했습니다.
