@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct SettingsView: View {
+struct MyPageView: View {
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
@@ -78,7 +78,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .navigationTitle("Settings")
+        .navigationTitle("MyPage")
         // 🔥 초기화 경고 얼럿 뷰
         .alert("앱 데이터 초기화", isPresented: $showResetAlert) {
             Button("취소", role: .cancel) { }
@@ -94,7 +94,7 @@ struct SettingsView: View {
     
     // MARK: - 개발자용 데이터 초기화 로직 (리팩토링)
     private func resetAllDeveloperData() {
-        print("🧹 [Settings] 앱 데이터 초기화 시작...")
+        print("🧹 [MyPage] 앱 데이터 초기화 시작...")
         
         let defaults = UserDefaults.standard
         
@@ -114,10 +114,10 @@ struct SettingsView: View {
         // 3. 강제 로그아웃 (이 값이 변경되면서 즉시 RootView를 통해 LoginView로 쫓겨납니다)
         AuthSessionStore.clear()
         
-        print("✅ [Settings] 앱 데이터 초기화 및 로그아웃 완료!")
+        print("✅ [MyPage] 앱 데이터 초기화 및 로그아웃 완료!")
     }
 }
 
 #Preview {
-    SettingsView()
+    MyPageView()
 }
