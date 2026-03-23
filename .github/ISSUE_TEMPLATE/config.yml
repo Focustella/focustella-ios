@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Team Discussion
+  - name: 팀 논의 / 질문
     url: https://github.com/Focustella/focustella-ios/discussions
-    about: 기능 제안/질문/논의는 Discussions를 사용해주세요.
+    about: 구현 요청이 아닌 질문, 아이디어 논의, 방향성 검토는 Discussions를 사용해주세요.
