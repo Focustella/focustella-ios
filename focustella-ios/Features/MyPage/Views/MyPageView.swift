@@ -69,12 +69,14 @@ struct MyPageView: View {
                                     Image(systemName: highPerformanceMode ? "bolt.fill" : "bolt.slash")
                                         .foregroundStyle(highPerformanceMode ? .yellow : .gray)
                                         .frame(width: 24)
+                                        .font(.title3) // 크기 통일
                                     Text("고사양 모드")
                                         .font(.body)
                                         .foregroundStyle(.white)
                                 }
                             }
                             .tint(.orange)
+                            .padding(.vertical, 8) // 높이 통일
                             
                             Divider().background(Color.white.opacity(0.2)).padding(.vertical, 4)
                             
@@ -83,12 +85,14 @@ struct MyPageView: View {
                                     Image(systemName: developerMode ? "hammer.fill" : "hammer")
                                         .foregroundStyle(developerMode ? .orange : .gray)
                                         .frame(width: 24)
+                                        .font(.title3) // 크기 통일
                                     Text("개발자 모드")
                                         .font(.body)
                                         .foregroundStyle(.white)
                                 }
                             }
                             .tint(.orange)
+                            .padding(.vertical, 8) // 높이 통일
                             
                             if developerMode {
                                 Divider().background(Color.white.opacity(0.2)).padding(.vertical, 4)
@@ -183,7 +187,7 @@ struct MyPageView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(Color.white.opacity(0.1))
-                        .cornerRadius(10)
+                        .cornerRadius(12)
                         .foregroundStyle(.white)
                     }
                     
@@ -205,19 +209,19 @@ struct MyPageView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(Color.white.opacity(0.1))
-                        .cornerRadius(10)
+                        .cornerRadius(12)
                         .foregroundStyle(.white)
                     }
                 }
             }
-            .padding(24)
+            .padding(20) // 기존 24에서 20으로 변경 (SettingCard와 통일)
             .background(
                 RoundedRectangle(cornerRadius: 20)
                     .fill(Color.white.opacity(0.08))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
             )
         }
     
@@ -247,27 +251,28 @@ struct MyPageView: View {
 struct SettingCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) { // 제목과 카드 사이 간격 소폭 조정
             Text(title)
                 .font(.headline)
                 .foregroundStyle(.white.opacity(0.6))
                 .padding(.leading, 4)
-            
+
             VStack(spacing: 0) {
                 content
             }
-            .padding()
-            .background(Color.white.opacity(0.05))
-            .cornerRadius(16)
+            .padding(20) // 내부 패딩 20으로 통일
+            .background(Color.white.opacity(0.08)) // 투명도 통일
+            .cornerRadius(20) // 코너 곡률 20으로 통일
             .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
             )
         }
     }
 }
+
 
 // MARK: - 🎨 재사용 가능한 버튼 Row 컴포넌트
 struct SettingRowButton: View {

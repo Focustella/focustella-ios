@@ -210,8 +210,8 @@ struct MySkyView: View {
                                     .background(Color.yellow.opacity(0.9), in: Capsule())
                                     .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
                                 }
-                                // 안전 영역(노치/다이내믹 아일랜드) 아래로 살짝 내리고 우측 여백 주기
-                                .padding(.top, proxy.safeAreaInsets.top + 16)
+                                // 안전 영역(노치/다이내믹 아일랜드) 아래로 충분히 내리고 우측 여백 주기
+                                .padding(.top, proxy.safeAreaInsets.top + 56)
                                 .padding(.trailing, 20)
                             }
                         }
@@ -302,9 +302,40 @@ struct MySkyView: View {
                                 return didSave
                             }
                         }
+            // 🔥 여기서부터 다시 추가! (우주 화면 하단에 떠 있는 시작 버튼들)
+                        .overlay(alignment: .bottom) {
+                            VStack(spacing: 10) {
+                                Button {
+                                    showDailySessionSheet = true
+                                } label: {
+                                    Text("오늘 하루 계획하기")
+                                        .font(.headline)
+                                        .foregroundStyle(.white)
+                                        .frame(width: 220, height: 48)
+                                        .background(Color.white.opacity(0.16), in: Capsule())
                                 }
-                                .preferredColorScheme(.dark)
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    showSlotPicker = true
+                                } label: {
+                                    Text("집중 세션 시작")
+                                        .font(.headline)
+                                        .foregroundStyle(.black)
+                                        .frame(width: 220, height: 48)
+                                        .background(Color.white, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
                             }
+                            .padding(.bottom, ctaBottomInset)
+                            // 튜토리얼이 끝났고, 현재 진행 중인 세션이 없을 때만 보임
+                            .opacity((showCTA && sessionStore.currentSession == nil && tutorialStep == .done) ? 1 : 0)
+                            .allowsHitTesting(showCTA && sessionStore.currentSession == nil && tutorialStep == .done)
+                            .animation(hasLaidOutCTA ? .easeInOut(duration: ctaFadeDuration) : nil, value: showCTA)
+                        }
+                    } // ZStack 닫기
+                    .preferredColorScheme(.dark)
+                }
 
     // MARK: - 🔥 튜토리얼 타임워프 세션 로직
     private func startTutorialWarpSession(size: CGSize) {
