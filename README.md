@@ -45,7 +45,7 @@ focustella-ios/
 │  │  ├─ ViewModels/
 │  │  ├─ Components/
 │  │  └─ Models/
-│  ├─ Settings/
+│  ├─ MyPage/
 │  │  ├─ Views/
 │  │  ├─ ViewModels/
 │  │  ├─ Components/

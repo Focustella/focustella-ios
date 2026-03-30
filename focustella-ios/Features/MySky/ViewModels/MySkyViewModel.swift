@@ -152,10 +152,10 @@ final class MySkyViewModel: ObservableObject {
     func saveNickname(_ nickname: String) async -> Bool {
             do {
                 try await updateNicknameUseCase.execute(nickname: nickname)
+                                // 🔥 2. AuthSessionStore를 통해 안전하게 닉네임 업데이트!
+                AuthSessionStore.updateNickname(nickname)
                 
-                // 성공했다면 다신 튜토리얼 안 뜨게 UserDefaults 변경!
-                UserDefaults.standard.set(false, forKey: "needsTutorial")
-                print("✅ 닉네임 저장 및 튜토리얼 완료 처리 성공!")
+                print("✅ 닉네임 저장 및 튜토리얼 완료 처리 성공! 닉네임: \(nickname)")
                 return true
                 
             } catch {

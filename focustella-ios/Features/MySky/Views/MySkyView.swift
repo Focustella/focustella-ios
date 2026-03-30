@@ -28,7 +28,8 @@ struct MySkyView: View {
     @State private var tutorialStep: TutorialStep = .notStarted
     
     @AppStorage("dailyStarsData") private var dailyStarsData: String = ""
-    @State private var dailyStars: [CGPoint] = []
+    @State private var dailyStars: [DailyStarItem] = []
+    @State private var selectedDailyStar: DailyStarItem? // 터치된 별을 기억할 변수
     @State private var showDailyRewardText = false
     @State private var dailyStarRippleCenter: CGPoint?
 
@@ -179,6 +180,7 @@ struct MySkyView: View {
                                                     return await viewModel.saveNickname(newNickname)
                                                 },
                                         onStartSession: { startTutorialWarpSession(size: size) },
+                                        onOpenDailySession: { showDailySessionSheet = true },
                                         onTriggerReward: { triggerTutorialRewardSequence(size: size) }, // 🔥 새로 생긴 콜백
                                         onFinish: {
                                             hasSeenTutorial = true
@@ -187,6 +189,32 @@ struct MySkyView: View {
                                     )
                                 }
             }
+            .overlay(alignment: .topTrailing) {
+                            if developerMode {
+                                Menu {
+                                    Picker("별 모양", selection: $starStyle) {
+                                        ForEach(StarAppearanceStyle.allCases, id: \.self) { style in
+                                            Text(style.rawValue).tag(style)
+                                        }
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "wrench.and.screwdriver.fill")
+                                            .font(.system(size: 12))
+                                        Text(starStyle.rawValue)
+                                            .font(.caption.bold())
+                                    }
+                                    .foregroundStyle(.black)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.yellow.opacity(0.9), in: Capsule())
+                                    .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
+                                }
+                                // 안전 영역(노치/다이내믹 아일랜드) 아래로 살짝 내리고 우측 여백 주기
+                                .padding(.top, proxy.safeAreaInsets.top + 16)
+                                .padding(.trailing, 20)
+                            }
+                        }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Text("MySky").font(.largeTitle.bold()).foregroundStyle(.white)
@@ -229,53 +257,54 @@ struct MySkyView: View {
                 insertUserConstellationAsCompleted(id: insertedId)
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DailySessionCompleted"))) { _ in
-                triggerDailyRewardSequence(size: canvasSize)
+                if !hasSeenTutorial && tutorialStep == .waitDaily {
+                                    // 튜토리얼 중 일일 세션을 완료했다면!
+                                    tutorialStep = .spawningReward
+                                    triggerTutorialRewardSequence(size: canvasSize)
+                                } else {
+                                    // 평소의 일반 일일 세션 보상
+                                    triggerDailyRewardSequence(size: canvasSize)
+                                }
             }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowFocusSession"))) { _ in showSlotPicker = true }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowDailySession"))) { _ in showDailySessionSheet = true }
             .sheet(isPresented: $showSlotPicker) { SlotPickerSheet { seconds in requestStartSession(slotSeconds: seconds) } }
-            .sheet(isPresented: $showDailySessionSheet) { DailySessionView() }
-            .sheet(isPresented: $showMemoSheet, onDismiss: { if pendingMemoSessionId == nil { scheduleCTA() } }) {
-                MemoSheet { memo in
-                    let didSave = await saveCompletedSessionMemo(memo)
-                    if didSave {
-                        pendingMemoSessionId = nil
-                        selectedSession = nil
-                        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
-                            showCompletionOverlay = false
-                            showCompletionRecordButton = false
+            .sheet(isPresented: $showDailySessionSheet) {
+                            DailySessionView() 
                         }
-                    }
-                    return didSave
-                }
-            }
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 10) {
-                    if developerMode {
-                        Menu {
-                            Picker("별 모양", selection: $starStyle) {
-                                ForEach(StarAppearanceStyle.allCases, id: \.self) { style in Text(style.rawValue).tag(style) }
+                        // 🔥 튜토리얼 강제 종료(탈옥) 방지 로직 추가!
+                        .onChange(of: showDailySessionSheet) { _, isShowing in
+                            // 시트가 방금 닫혔고(!isShowing),
+                            // 튜토리얼을 아직 안 봤고(!hasSeenTutorial),
+                            // 현재 상태가 일일 세션 대기 중(.waitDaily)이라면
+                            // = 완료 버튼을 안 누르고 강제로 바깥쪽을 터치해서 닫은 상황!
+                            if !isShowing && !hasSeenTutorial && tutorialStep == .waitDaily {
+                                
+                                print("🚨 튜토리얼 이탈 감지! 이전 단계로 롤백합니다.")
+                                
+                                // 다시 "일일 세션 계획하기" 툴팁과 버튼이 보이도록 살짝 돌려놓습니다.
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                    tutorialStep = .suggestDaily
+                                }
                             }
-                        } label: {
-                            Text("🛠 모양 변경: \(starStyle.rawValue)").font(.subheadline.bold()).foregroundStyle(.black).frame(width: 220, height: 42).background(Color.yellow.opacity(0.9), in: Capsule())
-                        }.padding(.bottom, 8)
-                    }
-                    
-                    Button { showDailySessionSheet = true } label: {
-                        Text("오늘 하루 계획하기").font(.headline).foregroundStyle(.white).frame(width: 220, height: 48).background(Color.white.opacity(0.16), in: Capsule())
-                    }.buttonStyle(.plain)
-
-                    Button { showSlotPicker = true } label: {
-                        Text("집중 세션 시작").font(.headline).foregroundStyle(.black).frame(width: 220, height: 48).background(Color.white, in: Capsule())
-                    }.buttonStyle(.plain)
-                }
-                .padding(.bottom, ctaBottomInset)
-                // 🔥 튜토리얼 중일 땐 하단 버튼들 숨김
-                .opacity((showCTA && sessionStore.currentSession == nil && tutorialStep == .done) ? 1 : 0)
-                .allowsHitTesting(showCTA && sessionStore.currentSession == nil && tutorialStep == .done)
-                .animation(hasLaidOutCTA ? .easeInOut(duration: ctaFadeDuration) : nil, value: showCTA)
-            }
-        }
-        .preferredColorScheme(.dark)
-    }
+                        }
+                        .sheet(isPresented: $showMemoSheet, onDismiss: { if pendingMemoSessionId == nil { scheduleCTA() } }) {
+                            MemoSheet { memo in
+                                let didSave = await saveCompletedSessionMemo(memo)
+                                if didSave {
+                                    pendingMemoSessionId = nil
+                                    selectedSession = nil
+                                    withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                                        showCompletionOverlay = false
+                                        showCompletionRecordButton = false
+                                    }
+                                }
+                                return didSave
+                            }
+                        }
+                                }
+                                .preferredColorScheme(.dark)
+                            }
 
     // MARK: - 🔥 튜토리얼 타임워프 세션 로직
     private func startTutorialWarpSession(size: CGSize) {
@@ -307,22 +336,27 @@ struct MySkyView: View {
         }
     }
 
-    // MARK: - 🔥 보상 로직 모음 (일일 보상 + 튜토리얼 보상)
-    private func parseDailyStars() {
-        let pairs = dailyStarsData.split(separator: "|")
-        dailyStars = pairs.compactMap { pair in
-            let coords = pair.split(separator: ",")
-            guard coords.count == 2, let x = Double(coords[0]), let y = Double(coords[1]) else { return nil }
-            return CGPoint(x: x, y: y)
+    // 🔥 2. 로컬 캐시 파싱 로직 업데이트 (x, y, timestamp 형태로 저장/불러오기)
+        private func parseDailyStars() {
+            let pairs = dailyStarsData.split(separator: "|")
+            dailyStars = pairs.compactMap { pair in
+                let components = pair.split(separator: ",")
+                guard components.count == 3,
+                      let x = Double(components[0]),
+                      let y = Double(components[1]),
+                      let timestamp = TimeInterval(components[2]) else { return nil }
+                return DailyStarItem(position: CGPoint(x: x, y: y), date: Date(timeIntervalSince1970: timestamp))
+            }
         }
-    }
-
+    
     private func saveDailyStar(_ point: CGPoint) {
-        dailyStars.append(point)
-        let pairs = dailyStars.map { "\($0.x),\($0.y)" }
-        dailyStarsData = pairs.joined(separator: "|")
-    }
-
+            let newItem = DailyStarItem(position: point, date: Date())
+            dailyStars.append(newItem)
+            
+            // "x,y,시간|x,y,시간" 형태로 저장
+            let pairs = dailyStars.map { "\($0.position.x),\($0.position.y),\($0.date.timeIntervalSince1970)" }
+            dailyStarsData = pairs.joined(separator: "|")
+        }
     // 1. 일일 세션 완료용
     private func triggerDailyRewardSequence(size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
@@ -559,7 +593,10 @@ struct MySkyView: View {
                         }
                     }
                 }
-                withAnimation(.easeInOut(duration: 0.2)) { selectedSession = best?.session }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedSession = best?.session
+                    selectedDailyStar = nil // 🌟 빈 우주를 터치하면 황금별 말풍선도 닫히도록 추가!
+                }
             }
     }
 
@@ -781,16 +818,47 @@ struct MySkyView: View {
     }
 
     @ViewBuilder
-    private func skyCanvas(size: CGSize) -> some View {
-        let completionConstellationId = completionConstellation?.id
-        let mapper = coordinateMapper(for: size)
-
-        ZStack {
-            ForEach(Array(dailyStars.enumerated()), id: \.offset) { index, pt in
-                let wPt = mapper.worldPoint(fromNormalized: pt)
-                DailyRewardStarNode(position: wPt)
-            }
-
+        private func skyCanvas(size: CGSize) -> some View {
+            let mapper = coordinateMapper(for: size)
+            let completionConstellationId = completionConstellation?.id
+            ZStack {
+                        // 🔥 3. 황금 별 렌더링 및 터치 이벤트
+                        ForEach(dailyStars) { item in
+                            let wPt = mapper.worldPoint(fromNormalized: item.position)
+                            
+                            DailyRewardStarNode() // (좌표 파라미터 삭제)
+                                .frame(width: 40, height: 40) // 알맹이 겉에 40x40짜리 터치 박스를 씌움
+                                .contentShape(Circle())       // 박스 모양은 동그라미!
+                                .onTapGesture {               // 터치 이벤트 달기
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                        if selectedDailyStar?.id == item.id {
+                                            selectedDailyStar = nil
+                                        } else {
+                                            selectedDailyStar = item
+                                        }
+                                    }
+                                }
+                                .position(wPt)
+                    // 🔥 4. 선택된 별 위에 뜨는 날짜 말풍선!
+                    if selectedDailyStar?.id == item.id {
+                        VStack(spacing: 4) {
+                            Text("✨ 일일 세션 완료")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.yellow)
+                            Text(item.date.formatted(date: .abbreviated, time: .shortened)) // 예: 10월 24일 오후 2:30
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                        // 말풍선 위치를 별의 살짝 위쪽으로 띄웁니다
+                        .position(x: wPt.x, y: wPt.y - 50)
+                        .zIndex(100) // 다른 별자리들보다 항상 위에 보이게!
+                        .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
+                    }
+                }
             ForEach(sessionStore.completedSessions) { session in
                 if completionConstellationId != session.constellationId, let constellation = constellationById(session.constellationId) {
                     let visibleCount = visibleDiscoveredStarCounts[session.constellationId] ?? constellation.starCount
@@ -938,39 +1006,42 @@ struct MySkyView: View {
     }
 
     @MainActor
-    private func refreshSky() async {
-        guard !isFetchingSky else { return }
-        isFetchingSky = true
-        defer { isFetchingSky = false }
+        private func refreshSky() async {
+            guard !isFetchingSky else { return }
+            isFetchingSky = true
+            defer { isFetchingSky = false }
 
-        do {
-            let sky = try await viewModel.fetchMySky(userSeed: Int64(userSeed))
-            userSeed = Int(sky.seed)
-            dailyStars = sky.dailyStars
-            dailyStarsData = dailyStars.map { "\($0.x),\($0.y)" }.joined(separator: "|")
+            do {
+                let sky = try await viewModel.fetchMySky(userSeed: Int64(userSeed))
+                userSeed = Int(sky.seed)
+                
+                // 🚨🚨🚨 [핵심 수정] 🚨🚨🚨
+                // 기존에 있던 fetchedStars 관련 코드를 완전히 삭제합니다!
+                // 서버의 임시 데이터가 우리가 기기에 예쁘게 저장해둔 별 위치와 시간을 덮어쓰지 못하게 막습니다.
+                // 이제 onAppear에서 부른 parseDailyStars()의 데이터가 절대적으로 유지됩니다.
 
-            let mergedSky = mergeRemoteSkyWithLocalState(sky)
-            remoteFocusLayoutItems = mergedSky.remoteFocusLayoutItems
-            placedConstellations = mergedSky.constellations
-            sessionStore.replaceCompletedSessions(mergedSky.completedSessions)
-            visibleDiscoveredStarCounts = Dictionary(uniqueKeysWithValues: mergedSky.completedSessions.map { ($0.constellationId, $0.discoveredStarCount) })
-            edgeRevealStates = Dictionary(
-                uniqueKeysWithValues: mergedSky.completedSessions.map {
-                    (
-                        $0.constellationId,
-                        EdgeRevealState(
-                            committedDiscoveredCount: $0.discoveredStarCount,
-                            pendingDiscoveredCount: nil,
-                            progress: 0
+                let mergedSky = mergeRemoteSkyWithLocalState(sky)
+                remoteFocusLayoutItems = mergedSky.remoteFocusLayoutItems
+                placedConstellations = mergedSky.constellations
+                sessionStore.replaceCompletedSessions(mergedSky.completedSessions)
+                visibleDiscoveredStarCounts = Dictionary(uniqueKeysWithValues: mergedSky.completedSessions.map { ($0.constellationId, $0.discoveredStarCount) })
+                edgeRevealStates = Dictionary(
+                    uniqueKeysWithValues: mergedSky.completedSessions.map {
+                        (
+                            $0.constellationId,
+                            EdgeRevealState(
+                                committedDiscoveredCount: $0.discoveredStarCount,
+                                pendingDiscoveredCount: nil,
+                                progress: 0
+                            )
                         )
-                    )
-                }
-            )
-        } catch {
-            Self.logger.error("sky fetch failed: \(error.localizedDescription)")
+                    }
+                )
+            } catch {
+                Self.logger.error("sky fetch failed: \(error.localizedDescription)")
+            }
         }
-    }
-
+    
     private var localConstellationUserId: String {
         userId.isEmpty ? fallbackLocalUserId : userId
     }
@@ -1108,7 +1179,6 @@ struct MySkyView: View {
 
 // MARK: - 일일 보상용 황금 별 디자인, Shape, 파동 애니메이션 유지
 private struct DailyRewardStarNode: View {
-    let position: CGPoint
     @State private var isBlinking = false
     var body: some View {
         let size: CGFloat = 16
@@ -1116,7 +1186,7 @@ private struct DailyRewardStarNode: View {
         ZStack {
             Circle().fill(color.opacity(0.3)).frame(width: size * 2.5, height: size * 2.5).blur(radius: size * 0.4).opacity(isBlinking ? 1.0 : 0.5)
             RewardStarShape(innerRatio: 0.35).fill(RadialGradient(colors: [.white, color], center: .center, startRadius: 0, endRadius: size / 2)).frame(width: size, height: size)
-        }.position(position).onAppear { withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) { isBlinking = true } }
+        }.onAppear { withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) { isBlinking = true } }
     }
 }
 

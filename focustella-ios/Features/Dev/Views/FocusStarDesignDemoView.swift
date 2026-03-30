@@ -176,14 +176,14 @@ private enum DemoTab: CaseIterable {
     case mySky
     case constellation
     case friends
-    case settings
+    case MyPage
 
     var title: String {
         switch self {
         case .mySky: return "MySky"
         case .constellation: return "Focus"
         case .friends: return "Friends"
-        case .settings: return "Settings"
+        case .MyPage: return "MyPage"
         }
     }
 
@@ -192,7 +192,7 @@ private enum DemoTab: CaseIterable {
         case .mySky: return "sparkles"
         case .constellation: return "star.leadinghalf.filled"
         case .friends: return "person.2.fill"
-        case .settings: return "gearshape.fill"
+        case .MyPage: return "gearshape.fill"
         }
     }
 }

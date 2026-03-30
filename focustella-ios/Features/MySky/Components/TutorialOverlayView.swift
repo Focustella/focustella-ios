@@ -3,18 +3,19 @@ import SwiftUI
 
 enum TutorialStep: Int {
     case notStarted = 0
-    case askNickname = 1       // 🔥 추가: "어떻게 부르면 좋을까요?"
-    case welcome = 2           // "이곳이 나의 밤하늘이에요!"
-    case pointToStart = 3      // "밤하늘에 나만의 별자리를 새겨볼까요?"
-    case suggest5Min = 4       // "우리 5분만 집중해볼까요?"
-    case warping = 5           // 타이머 진행 중 (입력 방지)
-    case constellationDone = 6 // "별자리가 만들어졌어요!"
-    case spawningReward = 7    // 보상 별 떨어지는 중 (입력 대기)
-    case dailyReward = 8       // "튜토리얼을 완료해서 별 한개를 받았어요."
-    case finalGreeting = 9     // "이제 나의 밤하늘을 가득 채우러 가볼까요?"
-    case done = 10             // 완전 종료
+    case askNickname = 1
+    case welcome = 2
+    case pointToStart = 3
+    case suggest5Min = 4
+    case warping = 5
+    case constellationDone = 6
+    case suggestDaily = 7      // 🔥 추가: "오늘 하루를 계획해볼까요?"
+    case waitDaily = 8         // 🔥 추가: 시트가 열려있는 동안 투명해지는 대기 상태
+    case spawningReward = 9
+    case dailyReward = 10
+    case finalGreeting = 11
+    case done = 12
 }
-
 struct TutorialOverlayView: View {
     @Binding var step: TutorialStep
     
@@ -24,6 +25,7 @@ struct TutorialOverlayView: View {
     
     var onSaveNickname: (String) async -> Bool // 백엔드 통신용 콜백
     var onStartSession: () -> Void
+    var onOpenDailySession: () -> Void // 🔥 추가: 일일 세션 바텀시트 열기 콜백
     var onTriggerReward: () -> Void
     var onFinish: () -> Void
     
@@ -121,6 +123,30 @@ struct TutorialOverlayView: View {
                         .padding(.top, 120)
                 }
                 
+                if step == .suggestDaily {
+                                    VStack(spacing: 16) {
+                                        tutorialTooltip(text: "집중을 멋지게 해내셨네요!\n이제 오늘 할 일을 계획하고\n황금 별을 받아볼까요? 🌟")
+                                        
+                                        Image(systemName: "arrow.down")
+                                            .font(.largeTitle)
+                                            .foregroundStyle(.yellow)
+                                            .modifier(BounceAnimation())
+                                            .padding(.bottom, 8)
+                                        
+                                        Button {
+                                            withAnimation { step = .waitDaily } // 대기 상태로 변경
+                                            onOpenDailySession() // 바텀시트 열기!
+                                        } label: {
+                                            Text("일일 세션 계획하기")
+                                                .font(.headline)
+                                                .foregroundStyle(.black)
+                                                .frame(width: 220, height: 48)
+                                                .background(Color.white, in: Capsule())
+                                        }
+                                    }
+                                    .padding(.bottom, 60)
+                                }
+                
                 if step == .dailyReward {
                     tutorialTooltip(text: "튜토리얼을 완료해서\n황금 별 한 개를 받았어요! 🌟")
                         .padding(.top, 120)
@@ -139,10 +165,7 @@ struct TutorialOverlayView: View {
             withAnimation(.spring()) {
                 if step == .welcome { step = .pointToStart }
                 else if step == .pointToStart { step = .suggest5Min }
-                else if step == .constellationDone {
-                    step = .spawningReward
-                    onTriggerReward()
-                }
+                else if step == .constellationDone { step = .suggestDaily } // 🔥 별자리 완성 후 제안으로 넘어감
                 else if step == .dailyReward { step = .finalGreeting }
                 else if step == .finalGreeting {
                     step = .done
