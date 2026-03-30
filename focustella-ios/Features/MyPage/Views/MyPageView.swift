@@ -7,6 +7,7 @@ struct MyPageView: View {
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
+    @AppStorage("mySkyBackgroundVariant") private var backgroundVariant: MySkyBackgroundVariant = .focusStar
     
     @State private var showResetAlert: Bool = false
     @State private var showDeleteAlert: Bool = false
@@ -93,6 +94,31 @@ struct MyPageView: View {
                             }
                             .tint(.orange)
                             .padding(.vertical, 8) // 높이 통일
+                            
+                            Divider().background(Color.white.opacity(0.2)).padding(.vertical, 4)
+                            
+                            // 🔥 이제 누구나 사용할 수 있는 하늘 배경 설정!
+                            HStack(spacing: 12) {
+                                Image(systemName: "moon.stars.fill")
+                                    .foregroundStyle(.cyan)
+                                    .frame(width: 24)
+                                    .font(.title3)
+                                
+                                Text("하늘 배경")
+                                    .font(.body)
+                                    .foregroundStyle(.white)
+                                
+                                Spacer()
+                                
+                                Picker("배경 선택", selection: $backgroundVariant) {
+                                    ForEach(MySkyBackgroundVariant.allCases, id: \.self) { variant in
+                                        Text(variant.title).tag(variant)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .accentColor(.white.opacity(0.6))
+                            }
+                            .padding(.vertical, 8)
                             
                             if developerMode {
                                 Divider().background(Color.white.opacity(0.2)).padding(.vertical, 4)
