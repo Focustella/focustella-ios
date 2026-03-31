@@ -5,6 +5,7 @@ struct DailySessionView: View {
     @Environment(\.scenePhase) private var scenePhase // 앱 상태 감지용
     @Environment(\.dismiss) private var dismiss
     
+    @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
     // 🔥 1. 만능 뷰모델 1개를 지우고, 용도별로 3개로 나누어 선언합니다!
     @StateObject private var activeViewModel = ActiveSessionViewModel()
     @StateObject private var templateViewModel = TemplateViewModel()
@@ -43,16 +44,15 @@ struct DailySessionView: View {
                     }
                 }
             }
-            .navigationTitle(activeViewModel.isSessionActive && !activeViewModel.hasCompletedToday ? "세션 진행 중" : "일일 세션")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(hasSeenTutorial ? (activeViewModel.isSessionActive && !activeViewModel.hasCompletedToday ? "세션 진행 중" : "일일 세션") : "✨ 첫 일일 세션 ✨")            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if activeViewModel.hasCompletedToday {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button(action: { showingHistorySheet = true }) {
-                            Image(systemName: "list.clipboard")
+                if hasSeenTutorial {
+                    if activeViewModel.hasCompletedToday {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button(action: { showingHistorySheet = true }) { Image(systemName: "list.clipboard") }
                         }
                     }
-                } else {
+                }else {
                     if activeViewModel.isSessionActive {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button("다시 선택") { showingCancelAlert = true }.tint(.red)
@@ -100,7 +100,8 @@ struct DailySessionView: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(hasSeenTutorial ? .visible : .hidden)
+        .interactiveDismissDisabled(!hasSeenTutorial)
         .onAppear {
             activeViewModel.refreshTodayStatus()
         }

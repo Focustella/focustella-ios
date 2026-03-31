@@ -2,12 +2,12 @@
 import SwiftUI
 
 struct TemplateSelectionView: View {
-    // 🔥 역할에 맞게 두 개의 뷰모델을 모두 받습니다!
     @ObservedObject var templateViewModel: TemplateViewModel
     @ObservedObject var activeViewModel: ActiveSessionViewModel
-    
     @Binding var showingAddTemplate: Bool
     @Binding var templateToEdit: ChecklistTemplate?
+    
+    @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
     
     var body: some View {
         Group {
@@ -18,36 +18,46 @@ struct TemplateSelectionView: View {
                         .foregroundColor(.gray.opacity(0.5))
                     
                     VStack(spacing: 8) {
-                        Text("저장된 템플릿이 없습니다")
+                        // 🔥 튜토리얼용 텍스트 분기
+                        Text(hasSeenTutorial ? "저장된 템플릿이 없습니다" : "일일 세션을 시작해볼까요?")
                             .font(.title3)
                             .fontWeight(.bold)
-                        Text("새로운 템플릿을 만들거나,\n빈 세션으로 바로 공부를 시작해보세요.")
+                        Text(hasSeenTutorial ? "새로운 템플릿을 만들거나,\n빈 세션으로 바로 공부를 시작해보세요." : "템플릿 없이 빈 세션으로\n자유롭게 시작할 수 있어요!")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     
                     VStack(spacing: 12) {
+                        if !hasSeenTutorial {
+                            Text("👇 여기를 눌러 바로 시작해봐요!")
+                                .font(.caption.bold())
+                                .foregroundStyle(.blue)
+                                .padding(.bottom, -4)
+                        }
+                        
                         Button(action: {
-                            // 🔥 빈 세션 시작은 ActiveViewModel에게 시킵니다!
                             withAnimation { activeViewModel.startEmptySession() }
                         }) {
-                            Text("템플릿 없이 바로 시작")
+                            Text(hasSeenTutorial ? "템플릿 없이 바로 시작" : "바로 시작하기") // 튜토리얼일 땐 문구를 더 직관적으로
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 4)
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.blue)
                         
-                        Button(action: {
-                            showingAddTemplate = true
-                        }) {
-                            Text("새 템플릿 만들기")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 4)
+                        // 🌟 튜토리얼 중에는 "새 템플릿 만들기" 버튼을 아예 숨깁니다!
+                        if hasSeenTutorial {
+                            Button(action: {
+                                showingAddTemplate = true
+                            }) {
+                                Text("새 템플릿 만들기")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.secondary)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.secondary)
                     }
                     .padding(.horizontal, 40)
                     .padding(.top, 16)

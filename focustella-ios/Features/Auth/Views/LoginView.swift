@@ -12,8 +12,7 @@ struct LoginView: View {
     @AppStorage("userId") private var userId: String = ""
     @AppStorage("userSeed") private var userSeed: Int = 0
     
-    // 🔥 1. 안 쓰는 @State isGuestLoading 삭제 (viewModel.isLoading으로 통일)
-    @State private var devUUID: String = ""
+    @State private var testEmail: String = ""
 
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("serverIP") private var serverIP: String = ""
@@ -85,17 +84,17 @@ struct LoginView: View {
                             .textInputAutocapitalization(.never)
                             .font(.system(size: 13, design: .monospaced))
                         
-                        TextField("UUID 직접 입력 (비워두면 랜덤)", text: $devUUID)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(10)
-                            .foregroundStyle(.white)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .font(.system(size: 13, design: .monospaced))
-                    }
+                        TextField("테스트 이메일 (비워두면 기본 계정)", text: $testEmail)
+                                                    .textFieldStyle(.plain)
+                                                    .padding(.horizontal, 12)
+                                                    .padding(.vertical, 10)
+                                                    .background(Color.white.opacity(0.1))
+                                                    .cornerRadius(10)
+                                                    .foregroundStyle(.white)
+                                                    .autocorrectionDisabled()
+                                                    .textInputAutocapitalization(.never)
+                                                    .font(.system(size: 13, design: .monospaced))
+                                            }
                     .padding(.horizontal, 32)
                     .padding(.bottom, 16)
                 }
@@ -103,7 +102,7 @@ struct LoginView: View {
                 // 🚀 4-A. 결제 전까지 임시로 사용할 더미 로그인 버튼
                 Button {
                     // 🔥 2. 아까 뷰모델에 만든 임시 애플 로그인 함수 연결!
-                    viewModel.performMockAppleSignIn()
+                    viewModel.performMockAppleSignIn(email: testEmail)
                 } label: {
                     HStack {
                         Image(systemName: "applelogo")

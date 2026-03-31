@@ -21,7 +21,9 @@ struct AuthSessionStore {
     static var myUserCode: String {
         UserDefaults.standard.string(forKey: userCodeKey) ?? "00000000"
     }
-
+    static func updateNickname(_ newNickname: String) {
+            UserDefaults.standard.set(newNickname, forKey: nicknameKey)
+        }
     // 🔥 3. 저장 함수 파라미터에 닉네임과 유저코드 추가!
     static func save(accessToken: String, userId: String, seed: Int64, nickname: String?, userCode: String?) {
         let defaults = UserDefaults.standard
@@ -31,6 +33,8 @@ struct AuthSessionStore {
         defaults.set(nickname, forKey: nicknameKey) // 닉네임 저장
         defaults.set(userCode, forKey: userCodeKey) // 유저코드 저장
         defaults.set(true, forKey: "isLoggedIn")
+        defaults.set(false, forKey: "hasSeenTutorial")
+        defaults.removeObject(forKey: "needsTutorial")
     }
 
     static func clear() {

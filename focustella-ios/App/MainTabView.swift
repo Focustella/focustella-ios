@@ -1,3 +1,4 @@
+// 📂 App/MainTabView.swift
 import SwiftUI
 
 struct MainTabView: View {
@@ -5,48 +6,57 @@ struct MainTabView: View {
         case mySky
         case dev
         case friends
-        case settings
+        case myPage
     }
-
+    
+    @State private var selectedTab: Tab = .mySky
     @AppStorage("developerMode") private var developerMode: Bool = false
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
+            
             NavigationStack {
                 MySkyView()
-                    .toolbar(.hidden, for: .navigationBar)
-                    .ignoresSafeArea(.container, edges: [.top])
+                // 🔥 이 두 줄을 추가해 주세요! 🔥
+                                    .ignoresSafeArea(edges: .top) // 우주 배경이 화면 끝까지 꽉 차게 올림
+                                    .toolbar(.hidden, for: .navigationBar) // 안 쓰는 빈 네비게이션 바 숨김
+            }
+            .tabItem {
+                Image(systemName: "sparkles")
+                Text("MySky")
             }
             .tag(Tab.mySky)
-            .tabItem {
-                Label("MySky", systemImage: "sparkles")
-            }
 
             if developerMode {
                 NavigationStack {
                     DevConstellationStudioView()
                 }
-                .tag(Tab.dev)
                 .tabItem {
-                    Label("Constellation", systemImage: "wand.and.stars")
+                    Image(systemName: "wand.and.stars")
+                    Text("Dev")
                 }
+                .tag(Tab.dev)
             }
 
             NavigationStack {
                 FriendsView()
             }
-            .tag(Tab.friends)
             .tabItem {
-                Label("Friends", systemImage: "person.2")
+                Image(systemName: "person.2")
+                Text("Friends")
             }
+            .tag(Tab.friends)
 
             NavigationStack {
-                SettingsView()
+                MyPageView()
             }
-            .tag(Tab.settings)
             .tabItem {
-                Label("Settings", systemImage: "gearshape")
+                Image(systemName: "gearshape")
+                Text("MyPage")
             }
+            .tag(Tab.myPage)
         }
+        // 우주 배경에 어울리도록 선택된 탭 아이콘을 흰색으로 강조!
+        .tint(.white)
     }
 }
