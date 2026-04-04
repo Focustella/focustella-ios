@@ -73,33 +73,45 @@ final class MySkyViewModel: ObservableObject {
         var results: [FocusSkyLayoutResult] = []
 
         for item in items.sorted(by: { focusLayoutOrder(lhs: $0, rhs: $1) }) {
-            guard let constellation = constellationRepository.placeRemoteConstellation(
-                template: item.template,
-                placementKey: item.sessionId,
-                occupied: constellations,
-                randomSeed: userSeed
-            ) else {
+            guard let result = placeFocusLayoutItem(item, occupied: constellations, userSeed: userSeed) else {
                 continue
             }
 
-            let session = FocusSession(
-                id: SkyMapper.focusSessionId(item.sessionId),
-                serverSessionId: item.sessionId,
-                serverConstellationId: item.serverConstellationId,
-                startedAt: item.startedAt,
-                endedAt: item.endedAt,
-                slotSeconds: item.slotSeconds,
-                constellationId: constellation.id,
-                discoveredStarCount: item.discoveredStarCount,
-                status: item.status,
-                memo: item.memo
-            )
-
-            constellations.append(constellation)
-            results.append(FocusSkyLayoutResult(item: item, session: session, constellation: constellation))
+            constellations.append(result.constellation)
+            results.append(result)
         }
 
         return results
+    }
+
+    func placeFocusLayoutItem(
+        _ item: FocusSkyLayoutItem,
+        occupied: [Constellation],
+        userSeed: Int64
+    ) -> FocusSkyLayoutResult? {
+        guard let constellation = constellationRepository.placeRemoteConstellation(
+            template: item.template,
+            placementKey: item.sessionId,
+            occupied: occupied,
+            randomSeed: userSeed
+        ) else {
+            return nil
+        }
+
+        let session = FocusSession(
+            id: SkyMapper.focusSessionId(item.sessionId),
+            serverSessionId: item.sessionId,
+            serverConstellationId: item.serverConstellationId,
+            startedAt: item.startedAt,
+            endedAt: item.endedAt,
+            slotSeconds: item.slotSeconds,
+            constellationId: constellation.id,
+            discoveredStarCount: item.discoveredStarCount,
+            status: item.status,
+            memo: item.memo
+        )
+
+        return FocusSkyLayoutResult(item: item, session: session, constellation: constellation)
     }
 
     func saveCompletedSession(_ request: FocusSessionSaveRequestDTO) async throws {

@@ -148,6 +148,11 @@ final class SessionStore: ObservableObject {
         completedSessions.insert(session, at: 0)
     }
 
+    func removeCompletedSessions(constellationIds: Set<UUID>) {
+        guard !constellationIds.isEmpty else { return }
+        completedSessions.removeAll { constellationIds.contains($0.constellationId) }
+    }
+
     func latestSession(constellationId: UUID) -> FocusSession? {
         completedSessions.first { $0.constellationId == constellationId }
     }
@@ -157,7 +162,7 @@ final class SessionStore: ObservableObject {
     func advanceToNextStar(
         totalStars: Int,
         now: Date = Date(),
-        leadSeconds: TimeInterval = 5
+        leadSeconds: TimeInterval = 2
     ) -> (advanced: Bool, completed: FocusSession?) {
         guard totalStars > 0, let session = currentSession else { return (false, nil) }
         guard session.status == .running || session.status == .paused else { return (false, nil) }

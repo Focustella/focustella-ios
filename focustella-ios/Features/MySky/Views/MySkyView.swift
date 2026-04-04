@@ -6,10 +6,13 @@ import os
 struct MySkyView: View {
     private static let logger = Logger(subsystem: "focustella-ios", category: "FocusSession")
 
-    private struct EdgeRevealState {
-        var committedDiscoveredCount: Int = 0
-        var pendingDiscoveredCount: Int?
-        var progress: CGFloat = 0
+    private struct PlacementProbeResult {
+        let step: Int
+        let constellationId: UUID?
+        let placementKey: String
+        let overlapDetected: Bool
+        let representativePoint: CGPoint?
+        let message: String
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -36,10 +39,9 @@ struct MySkyView: View {
     private let repository = ConstellationRepository()
     private let scheduler = DiscoveryScheduler()
 
-    @State private var scale: CGFloat = 1.0
-    @State private var scaleAnchor: CGFloat = 1.0
-    @State private var offset: CGSize = .zero
-    @State private var lastDrag: CGSize = .zero
+    @State private var cameraState: MySkyCameraState = .default
+    @State private var dragStartCamera: MySkyCameraState?
+    @State private var magnifyStartZoom: CGFloat?
     @State private var isInteracting = false
     @State private var canvasSize: CGSize = .zero
 
@@ -54,26 +56,31 @@ struct MySkyView: View {
     @State private var showMemoSheet = false
     @State private var activeStarBirthEffect: StarBirthEffectState?
     @State private var spawnEffectToken: Int = 0
-    @State private var pendingCameraMoveTask: Task<Void, Never>?
     @State private var cameraTransitionTask: Task<Void, Never>?
+    @State private var tutorialWarpTask: Task<Void, Never>?
     @State private var showCompletionOverlay = false
     @State private var showCompletionRecordButton = false
     @State private var completionFlowTask: Task<Void, Never>?
     @State private var completionEdgeOrder: [Int] = []
     @State private var hasLaidOutCTA = false
     @State private var hasInitializedView = false
-    @State private var remoteFocusLayoutItems: [FocusSkyLayoutItem] = []
-    @State private var placedConstellations: [Constellation] = []
-    @State private var visibleDiscoveredStarCounts: [UUID: Int] = [:]
-    @State private var edgeRevealStates: [UUID: EdgeRevealState] = [:]
+    @State private var skyState = MySkySceneState()
     @State private var edgeRevealTokens: [UUID: Int] = [:]
     @State private var isFetchingSky = false
+    @State private var placementProbeSeedText: String = "777"
+    @State private var placementProbeStep: Int = 0
+    @State private var placementProbeLastResult: PlacementProbeResult?
+    @State private var placementProbeConstellationIds: Set<UUID> = []
+    @State private var placementProbeCollapsed: Bool = true
+    @State private var placementProbeBatchCount: Int = 1
+    @State private var placementProbeTemplateKind: ConstellationPlacementFixture.TemplateKind = .compactPentagon
+    @State private var livePresentationState: FocusSessionPresentationState = .idle
     
     private let ctaFadeDuration: Double = 0.38
     private let ctaIdleDelay: Double = 1.5
     private let sessionAutoZoom: CGFloat = 2.0
-    private let completionEffectEnabled = false
-    private let completionCameraMoveDuration: TimeInterval = 1.05
+    private let tutorialGoldenStarSkyPoint = CGPoint(x: 0.5, y: 0.5)
+    private let tutorialSessionZoom: CGFloat = 1.35
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let fallbackLocalUserId = "local-user"
@@ -82,17 +89,24 @@ struct MySkyView: View {
         pendingMemoSessionId != nil || showMemoSheet || tutorialStep != .done
     }
 
+    private var stateMerger: MySkyStateMerger {
+        MySkyStateMerger(
+            placedConstellations: skyState.constellations,
+            completedSessions: sessionStore.completedSessions
+        )
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size
             let ctaBottomInset = max(36, proxy.safeAreaInsets.bottom + 94)
             
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 MySkyBackgroundLayer(
                     canvasSize: size,
                     safeAreaInsets: proxy.safeAreaInsets,
-                    scale: scale,
-                    offset: offset,
+                    scale: cameraState.zoom,
+                    offset: coordinateMapper(for: size).renderOffset(for: cameraState),
                     variant: backgroundVariant
                 )
                 interactiveSkyLayer(size: size)
@@ -113,27 +127,32 @@ struct MySkyView: View {
                                 sessionStore.resume(remainingStars: remainingStars)
                             },
                             onCancel: {
-                                pendingCameraMoveTask?.cancel()
                                 cameraTransitionTask?.cancel()
+                                tutorialWarpTask?.cancel()
                                 if let serverSessionId = sessionStore.currentSession?.serverSessionId {
-                                    remoteFocusLayoutItems.removeAll { $0.sessionId == serverSessionId }
+                                    skyState.removeRemoteLayoutItem(sessionId: serverSessionId)
                                     rebuildRemoteFocusLayout()
                                 } else if let constellationId = sessionStore.currentSession?.constellationId {
-                                    placedConstellations.removeAll { $0.id == constellationId }
+                                    skyState.removeConstellations(ids: [constellationId])
                                 }
                                 sessionStore.cancel()
-                                animateCamera(toScale: 1.0, toOffset: .zero, duration: 0.62)
+                                livePresentationState.reset()
+                                animateCamera(to: .default, duration: 0.62)
                                 scheduleCTA()
                             },
                             onAdvanceNextStar: {
                                 let result = sessionStore.advanceToNextStar(totalStars: constellation.starCount)
                                 if let completed = result.completed {
-                                    pendingCameraMoveTask?.cancel()
-                                    let duration = triggerSpawnEffectIfNeeded(constellation: constellation, discoveredCount: completed.discoveredStarCount)
-                                    handleSessionCompleted(completed, constellation: constellation, size: size, after: duration)
+                                    handleSessionCompleted(completed)
+                                    reconcileLivePresentation(constellation: constellation, size: size)
                                 }
                             },
-                            onAdvanceFinalStar: { if sessionStore.advanceToFinalStar(totalStars: constellation.starCount) { } }
+                            onAdvanceFinalStar: {
+                                prepareFinalStarOnlyBirth(constellation: constellation, size: size)
+                                if sessionStore.advanceToFinalStar(totalStars: constellation.starCount, leadSeconds: 0) {
+                                    syncSession(now: Date())
+                                }
+                            }
                         )
                         .padding(.horizontal, 20).padding(.bottom, 24)
                     }
@@ -155,12 +174,12 @@ struct MySkyView: View {
                 }
                 
                 if showDailyRewardText {
-                                    VStack {
-                                        Text("일일세션을 완료하여\n별 한 개를 받았어요!")
-                                            .font(.headline).foregroundStyle(.black).multilineTextAlignment(.center).padding(.vertical, 16).padding(.horizontal, 32).background(Color.white, in: Capsule()).shadow(color: .white.opacity(0.3), radius: 15)
-                                    }
-                                    .frame(maxHeight: .infinity, alignment: .top).padding(.top, size.height * 0.2).transition(.move(edge: .top).combined(with: .opacity)).zIndex(100)
-                                }
+                    VStack {
+                        Text("일일세션을 완료하여\n별 한 개를 받았어요!")
+                            .font(.headline).foregroundStyle(.black).multilineTextAlignment(.center).padding(.vertical, 16).padding(.horizontal, 32).background(Color.white, in: Capsule()).shadow(color: .white.opacity(0.3), radius: 15)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top).padding(.top, size.height * 0.2).transition(.move(edge: .top).combined(with: .opacity)).zIndex(100)
+                }
                 
                 if let constellation = completionConstellation {
                     CompletionAnimation(
@@ -172,75 +191,90 @@ struct MySkyView: View {
                     ).frame(width: size.width, height: size.height).allowsHitTesting(false)
                 }
                 // 🔥 튜토리얼 오버레이 추가
-                                if tutorialStep != .done && tutorialStep != .notStarted {
-                                    TutorialOverlayView(
-                                        step: $tutorialStep,
-                                                onSaveNickname: { newNickname in
-                                                    // 🔥 여기서 뷰모델의 통신 함수를 호출합니다!
-                                                    return await viewModel.saveNickname(newNickname)
-                                                },
-                                        onStartSession: { startTutorialWarpSession(size: size) },
-                                        onOpenDailySession: { showDailySessionSheet = true },
-                                        onTriggerReward: { triggerTutorialRewardSequence(size: size) }, // 🔥 새로 생긴 콜백
-                                        onFinish: {
-                                            hasSeenTutorial = true
-                                            animateCamera(toScale: 1.0, toOffset: .zero, duration: 1.2) // 🔥 카메라 원래대로
-                                        }
-                                    )
-                                }
+                if tutorialStep != .done && tutorialStep != .notStarted {
+                    TutorialOverlayView(
+                        step: $tutorialStep,
+                                onSaveNickname: { newNickname in
+                                    // 🔥 여기서 뷰모델의 통신 함수를 호출합니다!
+                                    return await viewModel.saveNickname(newNickname)
+                                },
+                        onStartSession: { startTutorialWarpSession(size: size) },
+                        onOpenDailySession: { showDailySessionSheet = true },
+                        onTriggerReward: { triggerTutorialRewardSequence(size: size) }, // 🔥 새로 생긴 콜백
+                        onFinish: {
+                            hasSeenTutorial = true
+                            animateCamera(to: .default, duration: 1.2) // 🔥 카메라 원래대로
+                        }
+                    )
+                }
             }
             .overlay(alignment: .topTrailing) {
-                            if developerMode {
-                                Menu {
-                                    Picker("별 모양", selection: $starStyle) {
-                                        ForEach(StarAppearanceStyle.allCases, id: \.self) { style in
-                                            Text(style.rawValue).tag(style)
-                                        }
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "wrench.and.screwdriver.fill")
-                                            .font(.system(size: 12))
-                                        Text(starStyle.rawValue)
-                                            .font(.caption.bold())
-                                    }
-                                    .foregroundStyle(.black)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(Color.yellow.opacity(0.9), in: Capsule())
-                                    .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
+                if developerMode {
+                    VStack(alignment: .trailing, spacing: 10) {
+                        Menu {
+                            Picker("별 모양", selection: $starStyle) {
+                                ForEach(StarAppearanceStyle.allCases, id: \.self) { style in
+                                    Text(style.rawValue).tag(style)
                                 }
-                                // 안전 영역(노치/다이내믹 아일랜드) 아래로 충분히 내리고 우측 여백 주기
-                                .padding(.top, proxy.safeAreaInsets.top + 56)
-                                .padding(.trailing, 20)
                             }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "wrench.and.screwdriver.fill")
+                                    .font(.system(size: 12))
+                                Text(starStyle.rawValue)
+                                    .font(.caption.bold())
+                            }
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.yellow.opacity(0.9), in: Capsule())
+                            .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
                         }
+
+                        placementProbeOverlay
+                    }
+                    .padding(.top, proxy.safeAreaInsets.top + 56)
+                    .padding(.trailing, 20)
+                }
+            }
+            .onDisappear {
+                resetPlacementProbe()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Text("MySky").font(.largeTitle.bold()).foregroundStyle(.white)
                 }
             }
             .onAppear {
-                            canvasSize = size
-                            guard !hasInitializedView else { return }
+                canvasSize = size
+                guard !hasInitializedView else { return }
 
-                            hasInitializedView = true
-                            
-                            // 🔥 수정: 튜토리얼의 첫 시작점을 닉네임 묻기로 변경합니다!
-                            if !hasSeenTutorial { tutorialStep = .askNickname }
-                            else { tutorialStep = .done }
+                hasInitializedView = true
+                
+                // 🔥 수정: 튜토리얼의 첫 시작점을 닉네임 묻기로 변경합니다!
+                if !hasSeenTutorial {
+                    tutorialStep = .askNickname
+                    cameraState = MySkyCameraState(centerSky: tutorialGoldenStarSkyPoint, zoom: 1.0)
+                } else {
+                    tutorialStep = .done
+                }
 
-                            showCTA = sessionStore.currentSession == nil
-                            hasLaidOutCTA = true
-                            parseDailyStars()
+                showCTA = sessionStore.currentSession == nil
+                hasLaidOutCTA = true
+                parseDailyStars()
 
-                            // Keep the first sky fetch on initial mount only so tab switches do not
-                            // recreate the whole sky state and trigger another expensive re-render.
-                            Task {
-                                await refreshSky()
-                                await syncLocalInsertedConstellations()
-                            }
-                        }
+                // Keep the first sky fetch on initial mount only so tab switches do not
+                // recreate the whole sky state and trigger another expensive re-render.
+                Task {
+                    await refreshSky()
+                    await syncLocalInsertedConstellations()
+                }
+            }
+            .onChange(of: developerMode) { _, enabled in
+                if !enabled {
+                    resetPlacementProbe()
+                }
+            }
             .onChange(of: size) { _, newValue in canvasSize = newValue }
             .onReceive(tick) { now in syncSession(now: now) }
             .onChange(of: scenePhase) { _, phase in
@@ -258,111 +292,222 @@ struct MySkyView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DailySessionCompleted"))) { _ in
                 if !hasSeenTutorial && tutorialStep == .waitDaily {
-                                    // 튜토리얼 중 일일 세션을 완료했다면!
-                                    tutorialStep = .spawningReward
-                                    triggerTutorialRewardSequence(size: canvasSize)
-                                } else {
-                                    // 평소의 일반 일일 세션 보상
-                                    triggerDailyRewardSequence(size: canvasSize)
-                                }
+                    // 튜토리얼 중 일일 세션을 완료했다면!
+                    tutorialStep = .spawningReward
+                    triggerTutorialRewardSequence(size: canvasSize)
+                } else {
+                    // 평소의 일반 일일 세션 보상
+                    triggerDailyRewardSequence(size: canvasSize)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowFocusSession"))) { _ in showSlotPicker = true }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowDailySession"))) { _ in showDailySessionSheet = true }
             .sheet(isPresented: $showSlotPicker) { SlotPickerSheet { seconds in requestStartSession(slotSeconds: seconds) } }
             .sheet(isPresented: $showDailySessionSheet) {
-                            DailySessionView() 
-                        }
-                        // 🔥 튜토리얼 강제 종료(탈옥) 방지 로직 추가!
-                        .onChange(of: showDailySessionSheet) { _, isShowing in
-                            // 시트가 방금 닫혔고(!isShowing),
-                            // 튜토리얼을 아직 안 봤고(!hasSeenTutorial),
-                            // 현재 상태가 일일 세션 대기 중(.waitDaily)이라면
-                            // = 완료 버튼을 안 누르고 강제로 바깥쪽을 터치해서 닫은 상황!
-                            if !isShowing && !hasSeenTutorial && tutorialStep == .waitDaily {
-                                
-                                print("🚨 튜토리얼 이탈 감지! 이전 단계로 롤백합니다.")
-                                
-                                // 다시 "일일 세션 계획하기" 툴팁과 버튼이 보이도록 살짝 돌려놓습니다.
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                                    tutorialStep = .suggestDaily
-                                }
-                            }
-                        }
-                        .sheet(isPresented: $showMemoSheet, onDismiss: { if pendingMemoSessionId == nil { scheduleCTA() } }) {
-                            MemoSheet { memo in
-                                let didSave = await saveCompletedSessionMemo(memo)
-                                if didSave {
-                                    pendingMemoSessionId = nil
-                                    selectedSession = nil
-                                    withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
-                                        showCompletionOverlay = false
-                                        showCompletionRecordButton = false
-                                    }
-                                }
-                                return didSave
-                            }
-                        }
-            // 🔥 여기서부터 다시 추가! (우주 화면 하단에 떠 있는 시작 버튼들)
-                        .overlay(alignment: .bottom) {
-                            VStack(spacing: 10) {
-                                Button {
-                                    showDailySessionSheet = true
-                                } label: {
-                                    Text("오늘 하루 계획하기")
-                                        .font(.headline)
-                                        .foregroundStyle(.white)
-                                        .frame(width: 220, height: 48)
-                                        .background(Color.white.opacity(0.16), in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    showSlotPicker = true
-                                } label: {
-                                    Text("집중 세션 시작")
-                                        .font(.headline)
-                                        .foregroundStyle(.black)
-                                        .frame(width: 220, height: 48)
-                                        .background(Color.white, in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.bottom, ctaBottomInset)
-                            // 튜토리얼이 끝났고, 현재 진행 중인 세션이 없을 때만 보임
-                            .opacity((showCTA && sessionStore.currentSession == nil && tutorialStep == .done) ? 1 : 0)
-                            .allowsHitTesting(showCTA && sessionStore.currentSession == nil && tutorialStep == .done)
-                            .animation(hasLaidOutCTA ? .easeInOut(duration: ctaFadeDuration) : nil, value: showCTA)
-                        }
-                    } // ZStack 닫기
-                    .preferredColorScheme(.dark)
+                DailySessionView()
+            }
+            // 🔥 튜토리얼 강제 종료(탈옥) 방지 로직 추가!
+            .onChange(of: showDailySessionSheet) { _, isShowing in
+                // 시트가 방금 닫혔고(!isShowing),
+                // 튜토리얼을 아직 안 봤고(!hasSeenTutorial),
+                // 현재 상태가 일일 세션 대기 중(.waitDaily)이라면
+                // = 완료 버튼을 안 누르고 강제로 바깥쪽을 터치해서 닫은 상황!
+                if !isShowing && !hasSeenTutorial && tutorialStep == .waitDaily {
+                    
+                    print("🚨 튜토리얼 이탈 감지! 이전 단계로 롤백합니다.")
+                    
+                    // 다시 "일일 세션 계획하기" 툴팁과 버튼이 보이도록 살짝 돌려놓습니다.
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                        tutorialStep = .suggestDaily
+                    }
                 }
+            }
+            .sheet(isPresented: $showMemoSheet, onDismiss: { if pendingMemoSessionId == nil { scheduleCTA() } }) {
+                MemoSheet { memo in
+                    let didSave = await saveCompletedSessionMemo(memo)
+                    if didSave {
+                        pendingMemoSessionId = nil
+                        selectedSession = nil
+                        livePresentationState.reset()
+                        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                            showCompletionOverlay = false
+                            showCompletionRecordButton = false
+                        }
+                    }
+                    return didSave
+                }
+            }
+            // 🔥 여기서부터 다시 추가! (우주 화면 하단에 떠 있는 시작 버튼들)
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 10) {
+                    Button {
+                        showDailySessionSheet = true
+                    } label: {
+                        Text("오늘 하루 계획하기")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(width: 220, height: 48)
+                            .background(Color.white.opacity(0.16), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showSlotPicker = true
+                    } label: {
+                        Text("집중 세션 시작")
+                            .font(.headline)
+                            .foregroundStyle(.black)
+                            .frame(width: 220, height: 48)
+                            .background(Color.white, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, ctaBottomInset)
+                // 튜토리얼이 끝났고, 현재 진행 중인 세션이 없을 때만 보임
+                .opacity((showCTA && sessionStore.currentSession == nil && tutorialStep == .done) ? 1 : 0)
+                .allowsHitTesting(showCTA && sessionStore.currentSession == nil && tutorialStep == .done)
+                .animation(hasLaidOutCTA ? .easeInOut(duration: ctaFadeDuration) : nil, value: showCTA)
+            }
+        } // ZStack 닫기
+        .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var placementProbeOverlay: some View {
+        if placementProbeCollapsed {
+            Button {
+                placementProbeCollapsed = false
+            } label: {
+                Text("별 삽입 도구")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("별 삽입 도구")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Button {
+                        placementProbeCollapsed = true
+                    } label: {
+                        Image(systemName: "chevron.up")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Seed")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    TextField("seed", text: $placementProbeSeedText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 76)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Template")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Picker("Template", selection: $placementProbeTemplateKind) {
+                        ForEach(ConstellationPlacementFixture.TemplateKind.allCases) { kind in
+                            Text(kind.title).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Count: \(placementProbeBatchCount)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Stepper("", value: $placementProbeBatchCount, in: 1...12)
+                        .labelsHidden()
+                }
+
+                HStack(spacing: 8) {
+                    Button(placementProbeBatchCount == 1 ? "다음 배치" : "\(placementProbeBatchCount)개 배치") {
+                        placeNextProbeConstellationBatch()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(sessionStore.currentSession != nil)
+
+                    Button("리셋") {
+                        resetPlacementProbe()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text(placementProbeSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .frame(width: 240, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+        }
+    }
+
+    private var placementProbeSummary: String {
+        guard let result = placementProbeLastResult else {
+            return "현재 하늘 상태 위에 테스트 별자리를 한 개씩 올립니다."
+        }
+
+        let repText: String
+        if let rep = result.representativePoint {
+            repText = "x=\(String(format: "%.3f", rep.x)) y=\(String(format: "%.3f", rep.y))"
+        } else {
+            repText = "nil"
+        }
+
+        return "#\(result.step) \(result.message)\n\(result.placementKey)  overlap=\(result.overlapDetected ? "YES" : "NO")  rep=\(repText)"
+    }
 
     // MARK: - 🔥 튜토리얼 타임워프 세션 로직
     private func startTutorialWarpSession(size: CGSize) {
         Task { @MainActor in
             guard let constellation = await repository.fetchSessionConstellation(
                 durationSeconds: 300,
-                occupied: placedConstellations,
+                occupied: skyState.constellations,
                 userId: localConstellationUserId,
                 randomSeed: Int64(userSeed)
             ) else { return }
-            
-            placedConstellations.append(constellation)
-            visibleDiscoveredStarCounts[constellation.id] = 0
-            edgeRevealStates[constellation.id] = EdgeRevealState()
-            
-            sessionStore.startSession(slotSeconds: 300, constellationId: constellation.id)
-            
-            // 시작 시 줌 아웃 (전체 관망)
-            focusOnRepresentative(constellation, size: size, zoom: 1.0)
-            
-            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
-                guard tutorialStep == .warping, sessionStore.currentStatus() == .running else {
-                    timer.invalidate()
-                    return
+
+            beginLiveSession(
+                constellation: constellation,
+                slotSeconds: 300,
+                startedAt: Date(),
+                clock: .tutorial(),
+                serverSessionId: nil,
+                serverConstellationId: nil,
+                size: size
+            )
+
+            tutorialWarpTask?.cancel()
+            tutorialWarpTask = Task { @MainActor in
+                while tutorialStep == .warping, sessionStore.currentStatus() == .running {
+                    if tutorialWarpCanAdvance {
+                        sessionStore.fastForwardTutorial(by: livePresentationState.clock.tutorialStepSeconds ?? 6)
+                        syncSession(now: Date())
+                    }
+                    try? await Task.sleep(for: .seconds(livePresentationState.clock.pollInterval))
                 }
-                sessionStore.fastForwardTutorial(by: 6)
-                syncSession(now: Date())
             }
         }
     }
@@ -388,27 +533,47 @@ struct MySkyView: View {
             let pairs = dailyStars.map { "\($0.position.x),\($0.position.y),\($0.date.timeIntervalSince1970)" }
             dailyStarsData = pairs.joined(separator: "|")
         }
+
+    private func makeRewardPoint(xRange: ClosedRange<CGFloat>, yRange: ClosedRange<CGFloat>) -> CGPoint {
+        MySkyRewardPlanner(
+            constellations: skyState.constellations,
+            dailyStars: dailyStars
+        ).makeRewardPoint(xRange: xRange, yRange: yRange)
+    }
+
+    private func runRewardSequence(
+        point: CGPoint,
+        size: CGSize,
+        cleanupDelay: TimeInterval,
+        onImpact: @escaping () -> Void
+    ) {
+        let zoom: CGFloat = 1.6
+        let targetCamera = cameraController(for: size).centeredCamera(forSky: point, zoom: zoom)
+
+        animateCamera(to: targetCamera, duration: 1.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            spawnEffectToken += 1
+            dailyStarRippleCenter = point
+            saveDailyStar(point)
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
+            onImpact()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + cleanupDelay) {
+                dailyStarRippleCenter = nil
+                animateCamera(to: .default, duration: 1.2)
+            }
+        }
+    }
+
     // 1. 일일 세션 완료용
     private func triggerDailyRewardSequence(size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
-        let newPoint = CGPoint(x: CGFloat.random(in: 0.15...0.85), y: CGFloat.random(in: 0.1...0.5))
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let wPt = coordinateMapper(for: size).worldPoint(fromNormalized: newPoint)
-        let zoom: CGFloat = 1.6
-        let targetOffset = CGSize(width: (center.x - wPt.x) * zoom, height: (center.y - wPt.y) * zoom)
-        
-        animateCamera(toScale: zoom, toOffset: targetOffset, duration: 1.0)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
-            spawnEffectToken += 1
-            dailyStarRippleCenter = newPoint
-            saveDailyStar(newPoint)
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.impactOccurred()
+        let newPoint = makeRewardPoint(xRange: 0.15...0.85, yRange: 0.1...0.5)
+        runRewardSequence(point: newPoint, size: size, cleanupDelay: 3.0) {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) { showDailyRewardText = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 withAnimation(.easeOut(duration: 0.5)) { showDailyRewardText = false }
-                dailyStarRippleCenter = nil
-                animateCamera(toScale: 1.0, toOffset: .zero, duration: 1.2)
             }
         }
     }
@@ -416,38 +581,21 @@ struct MySkyView: View {
     // 2. 튜토리얼 전용 보상 시퀀스
         private func triggerTutorialRewardSequence(size: CGSize) {
             guard size.width > 0, size.height > 0 else { return }
-            let newPoint = CGPoint(x: CGFloat.random(in: 0.2...0.8), y: CGFloat.random(in: 0.2...0.4))
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let wPt = coordinateMapper(for: size).worldPoint(fromNormalized: newPoint)
-            let zoom: CGFloat = 1.6
-            let targetOffset = CGSize(width: (center.x - wPt.x) * zoom, height: (center.y - wPt.y) * zoom)
-            
-            animateCamera(toScale: zoom, toOffset: targetOffset, duration: 1.0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
-                spawnEffectToken += 1
-                dailyStarRippleCenter = newPoint
-                saveDailyStar(newPoint)
-                let generator = UIImpactFeedbackGenerator(style: .medium)
-                generator.impactOccurred()
-                
+            let newPoint = tutorialGoldenStarSkyPoint
+            runRewardSequence(point: newPoint, size: size, cleanupDelay: 2.0) {
                 // 🔥 별이 땅에 닿자마자 튜토리얼 말풍선을 다음 단계로 넘김!
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
                     tutorialStep = .dailyReward
                 }
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    dailyStarRippleCenter = nil
-                    // (카메라 원상복구 로직은 onFinish 콜백으로 이동했습니다)
-                }
             }
         }
     // MARK: - 기존 로직 유지
-    private func constellationById(_ id: UUID) -> Constellation? { placedConstellations.first { $0.id == id } }
+    private func constellationById(_ id: UUID) -> Constellation? { skyState.constellation(id: id) }
 
     private func requestStartSession(slotSeconds: Int) {
         Task { @MainActor in
             guard sessionStore.currentSession == nil else { return }
-            let normalizedSeconds = max(30 * 60, slotSeconds)
+            let normalizedSeconds = max(5 * 60, slotSeconds)
             do {
                 let created = try await viewModel.createFocusSession(durationMinutes: normalizedSeconds / 60)
                 let startedAt = Date()
@@ -456,41 +604,180 @@ struct MySkyView: View {
                     startedAt: startedAt,
                     slotSeconds: normalizedSeconds
                 )
-                remoteFocusLayoutItems.append(createdItem)
+                skyState.appendRemoteLayoutItem(createdItem)
 
-                let layout = viewModel.layoutFocusConstellations(remoteFocusLayoutItems, userSeed: Int64(userSeed))
-                guard let createdResult = layout.first(where: { $0.item.sessionId == created.focusSessionId }) else {
-                    remoteFocusLayoutItems.removeAll { $0.sessionId == created.focusSessionId }
+                guard let createdResult = viewModel.placeFocusLayoutItem(
+                    createdItem,
+                    occupied: skyState.constellations,
+                    userSeed: Int64(userSeed)
+                ) else {
+                    skyState.removeRemoteLayoutItem(sessionId: created.focusSessionId)
                     Self.logger.error("focus create placement failed for sessionId=\(created.focusSessionId)")
                     return
                 }
 
                 let constellation = createdResult.constellation
                 guard !constellation.stars.isEmpty else {
-                    remoteFocusLayoutItems.removeAll { $0.sessionId == created.focusSessionId }
+                    skyState.removeRemoteLayoutItem(sessionId: created.focusSessionId)
                     return
                 }
 
-                applyRemoteFocusLayout(layout)
-                pendingCameraMoveTask?.cancel()
-                completionFlowTask?.cancel()
-                showCompletionOverlay = false
-                showCompletionRecordButton = false
-                pendingMemoSessionId = nil
-                visibleDiscoveredStarCounts[constellation.id] = 0
-                edgeRevealStates[constellation.id] = EdgeRevealState()
-                sessionStore.startSession(
+                skyState.upsertConstellation(constellation)
+                beginLiveSession(
+                    constellation: constellation,
                     slotSeconds: normalizedSeconds,
-                    constellationId: constellation.id,
+                    startedAt: startedAt,
+                    clock: .live,
                     serverSessionId: created.focusSessionId,
                     serverConstellationId: created.constellationId,
-                    now: startedAt
+                    size: canvasSize
                 )
                 selectedSession = nil
                 showCTA = false
-                focusNextStarIfNeeded(constellation: constellation, size: canvasSize)
             } catch {
                 Self.logger.error("focus create failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @MainActor
+    private func beginLiveSession(
+        constellation: Constellation,
+        slotSeconds: Int,
+        startedAt: Date,
+        clock: FocusSessionClock,
+        serverSessionId: String?,
+        serverConstellationId: Int?,
+        size: CGSize
+    ) {
+        completionFlowTask?.cancel()
+        showCompletionOverlay = false
+        showCompletionRecordButton = false
+        pendingMemoSessionId = nil
+        activeStarBirthEffect = nil
+        skyState.upsertConstellation(constellation)
+        skyState.setVisibleDiscoveredCount(0, for: constellation.id)
+        skyState.setEdgeRevealState(MySkyEdgeRevealState(), for: constellation.id)
+        sessionStore.startSession(
+            slotSeconds: slotSeconds,
+            constellationId: constellation.id,
+            serverSessionId: serverSessionId,
+            serverConstellationId: serverConstellationId,
+            now: startedAt
+        )
+        Self.logger.notice(
+            "live-session-start constellation=\(constellation.id.uuidString, privacy: .public) stars=\(constellation.starCount) slotSeconds=\(slotSeconds) rep=(\(constellation.representativePoint.x, format: .fixed(precision: 3)),\(constellation.representativePoint.y, format: .fixed(precision: 3)))"
+        )
+        beginLivePresentation(for: constellation, clock: clock, size: size)
+    }
+
+    private func beginLivePresentation(for constellation: Constellation, clock: FocusSessionClock, size: CGSize) {
+        let bootstrap = MySkyFocusSessionPresentation(
+            constellation: constellation,
+            actualDiscoveredCount: 0,
+            renderedDiscoveredCount: 0,
+            edgeRevealState: MySkyEdgeRevealState(),
+            activeBirthEffect: nil
+        )
+        livePresentationState = FocusSessionPresentationState(
+            constellationId: constellation.id,
+            discoveryOrder: bootstrap.discoveryOrder,
+            actualDiscoveredCount: 0,
+            renderedDiscoveredCount: 0,
+            currentTargetOrderIndex: nil,
+            activeBirthStarId: nil,
+            phase: .idle,
+            clock: clock
+        )
+
+        if livePresentationState.isTutorialClock {
+            let targetCamera = cameraController(for: size).centeredCamera(
+                forSky: constellation.representativePoint,
+                zoom: tutorialSessionZoom
+            )
+            logCameraTarget(
+                reason: "tutorial-fixed-representative constellation=\(constellation.id.uuidString)",
+                targetSky: constellation.representativePoint,
+                size: size,
+                targetCamera: targetCamera
+            )
+            animateCamera(to: targetCamera, duration: 0.55) {
+                guard livePresentationState.constellationId == constellation.id else { return }
+                livePresentationState.currentTargetOrderIndex = 0
+                livePresentationState.phase = .waitingToBirth(orderIndex: 0)
+                reconcileLivePresentation(constellation: constellation, size: size)
+            }
+            return
+        }
+
+        movePresentationCamera(toOrderIndex: 0, constellation: constellation, size: size)
+    }
+
+    private func movePresentationCamera(toOrderIndex orderIndex: Int, constellation: Constellation, size: CGSize) {
+        guard livePresentationState.constellationId == constellation.id else { return }
+        guard livePresentationState.discoveryOrder.indices.contains(orderIndex) else { return }
+        let starIndex = livePresentationState.discoveryOrder[orderIndex]
+        guard constellation.stars.indices.contains(starIndex) else { return }
+
+        livePresentationState.currentTargetOrderIndex = orderIndex
+        livePresentationState.phase = .movingToTarget(orderIndex: orderIndex)
+        let targetStar = constellation.stars[starIndex]
+        let targetCamera = cameraController(for: size).centeredCamera(forStar: targetStar, zoom: sessionAutoZoom)
+
+        logCameraTarget(
+            reason: "session-next-star constellation=\(constellation.id.uuidString)",
+            targetSky: CGPoint(x: targetStar.x, y: targetStar.y),
+            size: size,
+            targetCamera: targetCamera
+        )
+        animateCamera(to: targetCamera, duration: 1.05) {
+            guard livePresentationState.constellationId == constellation.id else { return }
+            guard case .movingToTarget(let currentOrder) = livePresentationState.phase, currentOrder == orderIndex else { return }
+            livePresentationState.phase = .waitingToBirth(orderIndex: orderIndex)
+            reconcileLivePresentation(constellation: constellation, size: size)
+        }
+    }
+
+    private func reconcileLivePresentation(constellation: Constellation, size: CGSize) {
+        guard livePresentationState.constellationId == constellation.id else { return }
+        if livePresentationState.canBeginBirth {
+            beginBirthPresentation(constellation: constellation, size: size)
+        }
+    }
+
+    private func beginBirthPresentation(constellation: Constellation, size: CGSize) {
+        guard livePresentationState.constellationId == constellation.id else { return }
+        guard let orderIndex = livePresentationState.nextOrderIndexToRender else { return }
+
+        let discoveredCount = orderIndex + 1
+        let duration = triggerSpawnEffectIfNeeded(constellation: constellation, discoveredCount: discoveredCount)
+        scheduleVisibleEdgeReveal(constellationId: constellation.id, discoveredCount: discoveredCount, after: duration)
+        beginEdgeRevealAnimation(constellation: constellation, discoveredCount: discoveredCount, duration: duration)
+
+        livePresentationState.phase = .birthing(orderIndex: orderIndex, token: spawnEffectToken)
+        livePresentationState.activeBirthStarId = activeStarBirthEffect?.starId
+
+        let token = spawnEffectToken
+        Task { @MainActor in
+            if duration > 0 { try? await Task.sleep(for: .seconds(duration)) }
+            guard livePresentationState.constellationId == constellation.id else { return }
+            guard case .birthing(let activeOrder, let activeToken) = livePresentationState.phase,
+                  activeOrder == orderIndex,
+                  activeToken == token else { return }
+
+            activeStarBirthEffect = nil
+            livePresentationState.renderedDiscoveredCount = discoveredCount
+            livePresentationState.activeBirthStarId = nil
+
+            if discoveredCount >= constellation.starCount {
+                startCompletionWrapUp(constellation: constellation, size: size)
+            } else if livePresentationState.isTutorialClock {
+                livePresentationState.currentTargetOrderIndex = discoveredCount
+                livePresentationState.phase = .waitingToBirth(orderIndex: discoveredCount)
+                reconcileLivePresentation(constellation: constellation, size: size)
+            } else {
+                movePresentationCamera(toOrderIndex: discoveredCount, constellation: constellation, size: size)
+                reconcileLivePresentation(constellation: constellation, size: size)
             }
         }
     }
@@ -499,63 +786,64 @@ struct MySkyView: View {
         guard let session = sessionStore.currentSession, let constellation = constellationById(session.constellationId) else { return }
 
         let result = sessionStore.refreshCurrentSession(now: now, totalStars: constellation.starCount, scheduler: scheduler)
-        if result.newlyDiscovered && result.completed == nil {
-            let discoveredCount = sessionStore.currentSession?.discoveredStarCount ?? session.discoveredStarCount
-            let duration = triggerSpawnEffectIfNeeded(constellation: constellation, discoveredCount: discoveredCount)
-            scheduleVisibleEdgeReveal(constellationId: constellation.id, discoveredCount: discoveredCount, after: duration)
-            beginEdgeRevealAnimation(constellation: constellation, discoveredCount: discoveredCount, duration: duration)
-            scheduleMoveToNextStarAfterSpawn(constellation: constellation, after: duration)
+        let actualDiscoveredCount = result.completed?.discoveredStarCount ?? sessionStore.currentSession?.discoveredStarCount ?? session.discoveredStarCount
+        if livePresentationState.constellationId == constellation.id {
+            livePresentationState.actualDiscoveredCount = actualDiscoveredCount
         }
+        let renderedCount = livePresentationState.constellationId == constellation.id
+            ? livePresentationState.renderedDiscoveredCount
+            : (skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0)
+        Self.logger.debug(
+            "session-tick constellation=\(constellation.id.uuidString, privacy: .public) actual=\(actualDiscoveredCount) rendered=\(renderedCount) total=\(constellation.starCount)"
+        )
         if let completed = result.completed {
-            pendingCameraMoveTask?.cancel()
-            let duration = triggerSpawnEffectIfNeeded(constellation: constellation, discoveredCount: completed.discoveredStarCount)
-            scheduleVisibleEdgeReveal(constellationId: constellation.id, discoveredCount: completed.discoveredStarCount, after: duration)
-            beginEdgeRevealAnimation(constellation: constellation, discoveredCount: completed.discoveredStarCount, duration: duration)
-            handleSessionCompleted(completed, constellation: constellation, size: canvasSize, after: duration)
+            handleSessionCompleted(completed)
         }
+        reconcileLivePresentation(constellation: constellation, size: canvasSize)
     }
 
-    private func handleSessionCompleted(_ completed: FocusSession, constellation: Constellation, size: CGSize, after delay: TimeInterval = 0) {
+    private func handleSessionCompleted(_ completed: FocusSession) {
         pendingMemoSessionId = completed.id
         selectedSession = nil
-
-        if completionEffectEnabled {
-            completionConstellation = constellation
-            completionEdgeOrder = bfsEdgeOrder(constellation: constellation)
-        } else {
-            completionConstellation = nil
-            completionEdgeOrder = []
-            startCompletionWrapUp(constellation: constellation, size: size, afterEffectDelay: delay)
-        }
+        tutorialWarpTask?.cancel()
+        completionConstellation = nil
+        completionEdgeOrder = []
     }
 
-    private func startCompletionWrapUp(constellation: Constellation, size: CGSize, afterEffectDelay delay: TimeInterval = 0) {
+    private func startCompletionWrapUp(constellation: Constellation, size: CGSize) {
             completionFlowTask?.cancel()
+            livePresentationState.phase = .overviewing
             completionFlowTask = Task { @MainActor in
-                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-                guard !Task.isCancelled else { return }
-                focusOnRepresentative(constellation, size: size, zoom: sessionAutoZoom)
-                try? await Task.sleep(for: .seconds(completionCameraMoveDuration))
-                guard !Task.isCancelled else { return }
-                
-                // 🔥 튜토리얼 모드일 경우 정상적인 완료 오버레이를 띄우지 않고 튜토리얼 5단계로 스킵!
-                if tutorialStep == .warping {
-                    // ⭐️ 핵심 해결: 튜토리얼 중엔 메모 대기를 강제로 해제하여 화면 잠금을 풉니다!
-                    pendingMemoSessionId = nil
-                    withAnimation { tutorialStep = .constellationDone }
-                } else {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) {
-                        showCompletionOverlay = true
-                        showCompletionRecordButton = false
-                    }
-                    try? await Task.sleep(for: .seconds(0.55))
-                    guard !Task.isCancelled else { return }
-                    withAnimation(.spring(response: 0.46, dampingFraction: 0.88)) {
-                        showCompletionRecordButton = true
-                    }
-                }
+                focusOnConstellationOverview(constellation, size: size)
             }
         }
+
+    private func prepareFinalStarOnlyBirth(constellation: Constellation, size: CGSize) {
+        guard livePresentationState.constellationId == constellation.id else { return }
+        guard constellation.starCount > 0 else { return }
+
+        let finalOrderIndex = constellation.starCount - 1
+        let settledDiscoveredCount = max(0, constellation.starCount - 1)
+
+        completionFlowTask?.cancel()
+        activeStarBirthEffect = nil
+        livePresentationState.actualDiscoveredCount = constellation.starCount
+        livePresentationState.renderedDiscoveredCount = settledDiscoveredCount
+        livePresentationState.activeBirthStarId = nil
+        livePresentationState.currentTargetOrderIndex = finalOrderIndex
+
+        skyState.setVisibleDiscoveredCount(settledDiscoveredCount, for: constellation.id)
+        skyState.setEdgeRevealState(
+            MySkyEdgeRevealState(
+                committedDiscoveredCount: settledDiscoveredCount,
+                pendingDiscoveredCount: nil,
+                progress: 0
+            ),
+            for: constellation.id
+        )
+
+        movePresentationCamera(toOrderIndex: finalOrderIndex, constellation: constellation, size: size)
+    }
     
     private func registerInteraction() {
         if showCTA { withAnimation(.easeInOut(duration: ctaFadeDuration)) { showCTA = false } }
@@ -582,11 +870,16 @@ struct MySkyView: View {
         DragGesture()
             .onChanged { value in
                 registerInteraction()
-                offset = CGSize(width: offset.width + value.translation.width - lastDrag.width, height: offset.height + value.translation.height - lastDrag.height)
-                lastDrag = value.translation
+                if dragStartCamera == nil {
+                    dragStartCamera = cameraState
+                }
+                cameraState = cameraController(for: canvasSize).dragging(
+                    camera: dragStartCamera ?? cameraState,
+                    translation: value.translation
+                )
             }
             .onEnded { _ in
-                lastDrag = .zero
+                dragStartCamera = nil
                 endInteraction()
             }
     }
@@ -595,108 +888,195 @@ struct MySkyView: View {
         MagnificationGesture()
             .onChanged { value in
                 registerInteraction()
-                let next = scaleAnchor * value
-                scale = min(max(next, 0.7), 2.0)
+                if magnifyStartZoom == nil {
+                    magnifyStartZoom = cameraState.zoom
+                }
+                cameraState = MySkyCameraState(
+                    centerSky: cameraState.centerSky,
+                    zoom: min(max((magnifyStartZoom ?? cameraState.zoom) * value, 0.22), 2.0)
+                )
             }
             .onEnded { _ in
-                scaleAnchor = scale
+                magnifyStartZoom = nil
                 endInteraction()
             }
     }
 
-    private func tapGesture(size: CGSize) -> some Gesture {
+    private func sessionTapGesture(size: CGSize) -> some Gesture {
         SpatialTapGesture()
             .onEnded { value in
-                registerInteraction()
-                defer { endInteraction() }
-                let normalized = normalizeTap(value.location, size: size)
-                var best: (session: FocusSession, distance: CGFloat)?
-
-                for session in sessionStore.completedSessions {
-                    guard let constellation = constellationById(session.constellationId) else { continue }
-                    for star in constellation.stars {
-                        let dx = star.x - normalized.x
-                        let dy = star.y - normalized.y
-                        let distance = sqrt(dx * dx + dy * dy)
-                        if distance < 0.04 {
-                            if let best, best.distance <= distance { continue }
-                            best = (session, distance)
-                        }
-                    }
-                }
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    selectedSession = best?.session
-                    selectedDailyStar = nil // 🌟 빈 우주를 터치하면 황금별 말풍선도 닫히도록 추가!
-                }
+                selectCompletedSession(at: value.location, size: size)
             }
     }
 
-    private func normalizeTap(_ location: CGPoint, size: CGSize) -> CGPoint {
+    private func selectCompletedSession(at screenPoint: CGPoint, size: CGSize) {
         let mapper = coordinateMapper(for: size)
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let world = CGPoint(
-            x: ((location.x - offset.width - center.x) / scale) + center.x,
-            y: ((location.y - offset.height - center.y) / scale) + center.y
-        )
-        return mapper.normalizedPoint(fromWorld: world)
+        let completionConstellationId = completionConstellation?.id
+        let liveConstellationId = livePresentationState.constellationId
+        let hitRadiusInScreen = max(24, 44 / max(cameraState.zoom, 0.22))
+
+        var bestMatch: (session: FocusSession, distance: CGFloat)?
+
+        for session in sessionStore.completedSessions {
+            guard completionConstellationId != session.constellationId,
+                  liveConstellationId != session.constellationId,
+                  let constellation = constellationById(session.constellationId) else {
+                continue
+            }
+
+            for star in constellation.stars {
+                let starScreen = mapper.screenPoint(
+                    fromSky: CGPoint(x: star.x, y: star.y),
+                    camera: cameraState
+                )
+                let distance = hypot(
+                    starScreen.x - screenPoint.x,
+                    starScreen.y - screenPoint.y
+                )
+
+                guard distance <= hitRadiusInScreen else { continue }
+                if let bestMatch, bestMatch.distance <= distance { continue }
+                bestMatch = (session, distance)
+            }
+        }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if let bestMatch {
+                selectedSession = bestMatch.session
+                selectedDailyStar = nil
+            } else {
+                selectedSession = nil
+            }
+        }
     }
 
     @ViewBuilder
     private func interactiveSkyLayer(size: CGSize) -> some View {
-        let base = skyCanvas(size: size)
-            .overlay {
-                // Keep the effect layer inside the exact same viewport bounds as the
-                // constellation canvas so zoom/pan transforms use an identical center.
-                interactiveEffectLayer(size: size)
-                    .frame(width: size.width, height: size.height)
+        let shouldUseSharedTimeline = (highPerformanceMode && !accessibility.isReduceMotionEnabled) || activeStarBirthEffect != nil
+        let renderedSky = Group {
+            if shouldUseSharedTimeline {
+                TimelineView(.periodic(from: .now, by: 1.0 / 8.0)) { context in
+                    skyCanvas(size: size, animationTime: context.date.timeIntervalSinceReferenceDate)
+                        .overlay {
+                            // Keep effect rendering in the same projected screen space as stars.
+                            interactiveEffectLayer(size: size)
+                                .frame(width: size.width, height: size.height)
+                        }
+                }
+            } else {
+                skyCanvas(size: size, animationTime: nil)
+                    .overlay {
+                        // Keep effect rendering in the same projected screen space as stars.
+                        interactiveEffectLayer(size: size)
+                            .frame(width: size.width, height: size.height)
+                }
             }
-            .frame(width: size.width, height: size.height)
-        .scaleEffect(scale)
-        .offset(offset)
-        .animation(nil, value: scale)
-        .animation(nil, value: offset)
+        }
+        .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
 
+        let interactionContainer = ZStack {
+            renderedSky
+        }
+        .frame(width: size.width, height: size.height)
+
         if isSkyInteractionLocked {
-            base.allowsHitTesting(false)
+            interactionContainer.allowsHitTesting(false)
         } else if sessionStore.currentSession == nil {
-            base
+            interactionContainer
+                .simultaneousGesture(sessionTapGesture(size: size))
                 .gesture(dragGesture())
                 .simultaneousGesture(magnificationGesture())
-                .simultaneousGesture(tapGesture(size: size))
         } else {
-            base
+            interactionContainer
         }
     }
 
-    private func focusNextStarIfNeeded(constellation: Constellation, size: CGSize) {
+    private func focusSessionPresentation(for constellation: Constellation) -> MySkyFocusSessionPresentation {
+        let actualDiscoveredCount: Int
+        let renderedDiscoveredCount: Int
+        if livePresentationState.constellationId == constellation.id {
+            actualDiscoveredCount = livePresentationState.actualDiscoveredCount
+            renderedDiscoveredCount = livePresentationState.renderedDiscoveredCount
+        } else if sessionStore.currentSession?.constellationId == constellation.id {
+            actualDiscoveredCount = sessionStore.currentSession?.discoveredStarCount ?? 0
+            renderedDiscoveredCount = skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0
+        } else {
+            actualDiscoveredCount = max(
+                skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0,
+                sessionStore.latestSession(constellationId: constellation.id)?.discoveredStarCount ?? 0
+            )
+            renderedDiscoveredCount = skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0
+        }
+
+        return MySkyFocusSessionPresentation(
+            constellation: constellation,
+            actualDiscoveredCount: actualDiscoveredCount,
+            renderedDiscoveredCount: renderedDiscoveredCount,
+            edgeRevealState: skyState.edgeRevealStates[constellation.id] ?? MySkyEdgeRevealState(),
+            activeBirthEffect: activeStarBirthEffect?.constellationId == constellation.id ? activeStarBirthEffect : nil
+        )
+    }
+
+    private func focusOnStar(_ star: Star, size: CGSize, zoom: CGFloat, reason: String) {
+        let targetCamera = cameraController(for: size).centeredCamera(forStar: star, zoom: zoom)
+        logCameraTarget(
+            reason: reason,
+            targetSky: CGPoint(x: star.x, y: star.y),
+            size: size,
+            targetCamera: targetCamera
+        )
+        animateCamera(to: targetCamera, duration: 1.05)
+    }
+
+    private func focusOnConstellationOverview(_ constellation: Constellation, size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
-        // 🔥 핵심 수정: 워프 중일 때는 카메라가 별을 하나하나 따라가지 않게 끕니다!
-        guard tutorialStep != .warping else { return }
-        
-        guard let session = sessionStore.currentSession else { return }
-        let nextIndex = min(session.discoveredStarCount, constellation.starCount - 1)
-        guard constellation.stars.indices.contains(nextIndex) else { return }
-        focusOnStar(constellation.stars[nextIndex], size: size, zoom: sessionAutoZoom)
+        let targetCamera = cameraController(for: size).overviewCamera(for: constellation)
+        logCameraTarget(
+            reason: "focus-overview constellation=\(constellation.id.uuidString)",
+            targetSky: ConstellationGeometry(constellation: constellation).visualFocusPoint,
+            size: size,
+            targetCamera: targetCamera
+        )
+        animateCamera(to: targetCamera, duration: 1.05) {
+            guard livePresentationState.constellationId == constellation.id else { return }
+            if tutorialStep == .warping {
+                pendingMemoSessionId = nil
+                livePresentationState.reset()
+                withAnimation { tutorialStep = .constellationDone }
+            } else {
+                livePresentationState.phase = .awaitingMemo
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) {
+                    showCompletionOverlay = true
+                    showCompletionRecordButton = false
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(0.55))
+                    guard livePresentationState.phase == .awaitingMemo else { return }
+                    withAnimation(.spring(response: 0.46, dampingFraction: 0.88)) {
+                        showCompletionRecordButton = true
+                    }
+                }
+            }
+        }
     }
 
-    private func focusOnRepresentative(_ constellation: Constellation, size: CGSize, zoom: CGFloat) {
-        guard size.width > 0, size.height > 0 else { return }
-        let star = Star(x: constellation.representativePoint.x, y: constellation.representativePoint.y)
-        focusOnStar(star, size: size, zoom: zoom)
+    private func logCameraTarget(reason: String, targetSky: CGPoint, size: CGSize, targetCamera: MySkyCameraState) {
+        guard developerMode else { return }
+        let mapper = coordinateMapper(for: size)
+        let canvasTarget = mapper.canvasPoint(fromSky: targetSky)
+        Self.logger.notice(
+            "camera reason=\(reason, privacy: .public) skyTarget=(\(targetSky.x, format: .fixed(precision: 3)),\(targetSky.y, format: .fixed(precision: 3))) canvasTarget=(\(canvasTarget.x, format: .fixed(precision: 3)),\(canvasTarget.y, format: .fixed(precision: 3))) currentCameraCenterSky=(\(cameraState.centerSky.x, format: .fixed(precision: 3)),\(cameraState.centerSky.y, format: .fixed(precision: 3))) cameraCenterSky=(\(targetCamera.centerSky.x, format: .fixed(precision: 3)),\(targetCamera.centerSky.y, format: .fixed(precision: 3))) screenCenter=(\(mapper.screenCenter.x, format: .fixed(precision: 1)),\(mapper.screenCenter.y, format: .fixed(precision: 1))) zoom=\(targetCamera.zoom, format: .fixed(precision: 3))"
+        )
     }
 
-    private func focusOnStar(_ star: Star, size: CGSize, zoom: CGFloat) {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let point = coordinateMapper(for: size).worldPoint(for: star)
-        let nextOffset = CGSize(width: (center.x - point.x) * zoom, height: (center.y - point.y) * zoom)
-        animateCamera(toScale: zoom, toOffset: nextOffset, duration: 1.05)
-    }
-
-    private func animateCamera(toScale targetScale: CGFloat, toOffset targetOffset: CGSize, duration: TimeInterval) {
+    private func animateCamera(
+        to targetCamera: MySkyCameraState,
+        duration: TimeInterval,
+        completion: (@MainActor () -> Void)? = nil
+    ) {
         cameraTransitionTask?.cancel()
-        let startScale = scale
-        let startOffset = offset
+        let startCamera = cameraState
         let frameCount = max(12, Int(duration * 60))
 
         cameraTransitionTask = Task { @MainActor in
@@ -704,25 +1084,30 @@ struct MySkyView: View {
                 guard !Task.isCancelled else { return }
                 let t = CGFloat(step) / CGFloat(frameCount)
                 let eased = t * t * (3 - 2 * t)
-                scale = startScale + (targetScale - startScale) * eased
-                scaleAnchor = scale
-                offset = CGSize(
-                    width: startOffset.width + (targetOffset.width - startOffset.width) * eased,
-                    height: startOffset.height + (targetOffset.height - startOffset.height) * eased
+                cameraState = MySkyCameraState(
+                    centerSky: CGPoint(
+                        x: startCamera.centerSky.x + (targetCamera.centerSky.x - startCamera.centerSky.x) * eased,
+                        y: startCamera.centerSky.y + (targetCamera.centerSky.y - startCamera.centerSky.y) * eased
+                    ),
+                    zoom: startCamera.zoom + (targetCamera.zoom - startCamera.zoom) * eased
                 )
                 try? await Task.sleep(for: .seconds(duration / Double(frameCount)))
             }
-            scale = targetScale
-            scaleAnchor = targetScale
-            offset = targetOffset
+            guard !Task.isCancelled else { return }
+            cameraState = targetCamera
+            completion?()
         }
     }
 
     @discardableResult
     private func triggerSpawnEffectIfNeeded(constellation: Constellation, discoveredCount: Int) -> TimeInterval {
-        let newIndex = discoveredCount - 1
-        guard newIndex >= 0, constellation.stars.indices.contains(newIndex) else { return 0 }
-        let star = constellation.stars[newIndex]
+        let presentation = focusSessionPresentation(for: constellation)
+        guard let star = presentation.birthStar(for: discoveredCount) else { return 0 }
+        if developerMode {
+            Self.logger.notice(
+                "birth constellation=\(constellation.id.uuidString, privacy: .public) discovered=\(discoveredCount) star=\(star.id.uuidString, privacy: .public) skyTarget=(\(star.x, format: .fixed(precision: 3)),\(star.y, format: .fixed(precision: 3)))"
+            )
+        }
         spawnEffectToken += 1
         activeStarBirthEffect = StarBirthEffectState(
             constellationId: constellation.id,
@@ -730,19 +1115,19 @@ struct MySkyView: View {
             connectionPairs: birthConnectionPairs(constellation: constellation, discoveredCount: discoveredCount, newStarId: star.id),
             token: spawnEffectToken
         )
-        let effectDuration: TimeInterval = accessibility.isReduceMotionEnabled ? 0.42 : 1.5
+        return birthEffectDuration()
+    }
 
-        Task { @MainActor in
-            let token = spawnEffectToken
-            try? await Task.sleep(for: .seconds(effectDuration))
-            guard spawnEffectToken == token else { return }
-            activeStarBirthEffect = nil
+    private func birthEffectDuration() -> TimeInterval {
+        if accessibility.isReduceMotionEnabled {
+            return livePresentationState.isTutorialClock ? 0.42 : 0.42
         }
-        return effectDuration
+        return livePresentationState.isTutorialClock ? 1.5 : 1.5
     }
 
     private func birthConnectionPairs(constellation: Constellation, discoveredCount: Int, newStarId: UUID) -> [StarBirthConnectionPair] {
-        let discoveredIds = Set(constellation.stars.prefix(discoveredCount).map(\.id))
+        let presentation = focusSessionPresentation(for: constellation)
+        let discoveredIds = Set(presentation.stars(forDiscoveredCount: discoveredCount).map(\.id))
         return constellation.edges.compactMap { edge in
             let isConnectedToNew = edge.from == newStarId || edge.to == newStarId
             guard isConnectedToNew, discoveredIds.contains(edge.from), discoveredIds.contains(edge.to) else { return nil }
@@ -752,7 +1137,8 @@ struct MySkyView: View {
 
     private func runningEdgeIndices(constellation: Constellation, discoveredCount: Int) -> Set<Int> {
         guard discoveredCount > 0 else { return [] }
-        let discoveredIds = Set(constellation.stars.prefix(discoveredCount).map(\.id))
+        let presentation = focusSessionPresentation(for: constellation)
+        let discoveredIds = Set(presentation.stars(forDiscoveredCount: discoveredCount).map(\.id))
         var indices: Set<Int> = []
         for (index, edge) in constellation.edges.enumerated() {
             if discoveredIds.contains(edge.from), discoveredIds.contains(edge.to) { indices.insert(index) }
@@ -763,35 +1149,41 @@ struct MySkyView: View {
     private func scheduleVisibleEdgeReveal(constellationId: UUID, discoveredCount: Int, after delay: TimeInterval) {
         Task { @MainActor in
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-            visibleDiscoveredStarCounts[constellationId] = discoveredCount
+            skyState.setVisibleDiscoveredCount(discoveredCount, for: constellationId)
         }
     }
 
     private func beginEdgeRevealAnimation(constellation: Constellation, discoveredCount: Int, duration: TimeInterval) {
         let id = constellation.id
-        var state = edgeRevealStates[id] ?? EdgeRevealState()
+        var state = skyState.edgeRevealStates[id] ?? MySkyEdgeRevealState()
         state.pendingDiscoveredCount = discoveredCount
         state.progress = duration > 0 ? 0 : 1
-        edgeRevealStates[id] = state
+        skyState.setEdgeRevealState(state, for: id)
 
         let token = (edgeRevealTokens[id] ?? 0) + 1
         edgeRevealTokens[id] = token
 
-        if duration > 0 { withAnimation(.linear(duration: duration)) { edgeRevealStates[id]?.progress = 1 } }
+        if duration > 0 {
+            withAnimation(.linear(duration: duration)) {
+                var updated = skyState.edgeRevealStates[id] ?? MySkyEdgeRevealState()
+                updated.progress = 1
+                skyState.setEdgeRevealState(updated, for: id)
+            }
+        }
 
         Task { @MainActor in
             if duration > 0 { try? await Task.sleep(for: .seconds(duration)) }
             guard edgeRevealTokens[id] == token else { return }
-            guard var latest = edgeRevealStates[id] else { return }
+            guard var latest = skyState.edgeRevealStates[id] else { return }
             latest.committedDiscoveredCount = discoveredCount
             latest.pendingDiscoveredCount = nil
             latest.progress = 0
-            edgeRevealStates[id] = latest
+            skyState.setEdgeRevealState(latest, for: id)
         }
     }
 
     private func edgeRenderState(for constellation: Constellation) -> (visibleIndices: Set<Int>, visibilityOverrides: [Int: CGFloat]) {
-        let state = edgeRevealStates[constellation.id] ?? EdgeRevealState()
+        let state = skyState.edgeRevealStates[constellation.id] ?? MySkyEdgeRevealState()
         let committedIndices = runningEdgeIndices(constellation: constellation, discoveredCount: state.committedDiscoveredCount)
         guard let pendingCount = state.pendingDiscoveredCount else { return (committedIndices, [:]) }
 
@@ -801,120 +1193,132 @@ struct MySkyView: View {
         return (committedIndices.union(pendingIndices), visibilityOverrides)
     }
 
-    private func scheduleMoveToNextStarAfterSpawn(constellation: Constellation, after delay: TimeInterval) {
-        pendingCameraMoveTask?.cancel()
-        pendingCameraMoveTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(max(0, delay)))
-            guard !Task.isCancelled, sessionStore.currentSession != nil, sessionStore.currentStatus() == .running else { return }
-            focusNextStarIfNeeded(constellation: constellation, size: canvasSize)
-        }
+    private var tutorialWarpCanAdvance: Bool {
+        guard sessionStore.currentStatus() == .running else { return false }
+        guard activeStarBirthEffect == nil else { return false }
+        guard completionFlowTask == nil else { return false }
+        return livePresentationState.isAwaitingBirth
     }
 
     private func coordinateMapper(for size: CGSize) -> MySkyCoordinateMapper {
         MySkyCoordinateMapper(canvasSize: size)
     }
 
-    private func bfsEdgeOrder(constellation: Constellation) -> [Int] {
-        guard !constellation.stars.isEmpty, !constellation.edges.isEmpty else { return [] }
-        let idToIndex = Dictionary(uniqueKeysWithValues: constellation.stars.enumerated().map { ($0.element.id, $0.offset) })
-        var adjacency: [UUID: [(neighbor: UUID, edgeIndex: Int)]] = [:]
-
-        for (edgeIndex, edge) in constellation.edges.enumerated() {
-            adjacency[edge.from, default: []].append((edge.to, edgeIndex))
-            adjacency[edge.to, default: []].append((edge.from, edgeIndex))
-        }
-
-        let startId = constellation.stars[0].id
-        var queue: [UUID] = [startId]
-        var visited: Set<UUID> = [startId]
-        var usedEdges: Set<Int> = []
-        var order: [Int] = []
-
-        while !queue.isEmpty {
-            let current = queue.removeFirst()
-            let neighbors = adjacency[current, default: []].sorted { (idToIndex[$0.neighbor] ?? .max) < (idToIndex[$1.neighbor] ?? .max) }
-            for entry in neighbors where !usedEdges.contains(entry.edgeIndex) {
-                usedEdges.insert(entry.edgeIndex)
-                order.append(entry.edgeIndex)
-                if !visited.contains(entry.neighbor) {
-                    visited.insert(entry.neighbor)
-                    queue.append(entry.neighbor)
-                }
-            }
-        }
-        if order.count < constellation.edges.count {
-            for edgeIndex in constellation.edges.indices where !usedEdges.contains(edgeIndex) { order.append(edgeIndex) }
-        }
-        return order
+    private func cameraController(for size: CGSize) -> MySkyCameraController {
+        MySkyCameraController(mapper: coordinateMapper(for: size))
     }
 
     @ViewBuilder
-        private func skyCanvas(size: CGSize) -> some View {
+        private func skyCanvas(size: CGSize, animationTime: TimeInterval?) -> some View {
             let mapper = coordinateMapper(for: size)
-            let completionConstellationId = completionConstellation?.id
-            ZStack {
-                        // 🔥 3. 황금 별 렌더링 및 터치 이벤트
-                        ForEach(dailyStars) { item in
-                            let wPt = mapper.worldPoint(fromNormalized: item.position)
-                            
-                            DailyRewardStarNode() // (좌표 파라미터 삭제)
-                                .frame(width: 40, height: 40) // 알맹이 겉에 40x40짜리 터치 박스를 씌움
-                                .contentShape(Circle())       // 박스 모양은 동그라미!
-                                .onTapGesture {               // 터치 이벤트 달기
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                                        if selectedDailyStar?.id == item.id {
-                                            selectedDailyStar = nil
-                                        } else {
-                                            selectedDailyStar = item
-                                        }
-                                    }
-                                }
-                                .position(wPt)
-                    // 🔥 4. 선택된 별 위에 뜨는 날짜 말풍선!
-                    if selectedDailyStar?.id == item.id {
-                        VStack(spacing: 4) {
-                            Text("✨ 일일 세션 완료")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.yellow)
-                            Text(item.date.formatted(date: .abbreviated, time: .shortened)) // 예: 10월 24일 오후 2:30
-                                .font(.caption.bold())
-                                .foregroundStyle(.white)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
-                        // 말풍선 위치를 별의 살짝 위쪽으로 띄웁니다
-                        .position(x: wPt.x, y: wPt.y - 50)
-                        .zIndex(100) // 다른 별자리들보다 항상 위에 보이게!
-                        .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
-                    }
-                }
-            ForEach(sessionStore.completedSessions) { session in
-                if completionConstellationId != session.constellationId, let constellation = constellationById(session.constellationId) {
-                    let visibleCount = visibleDiscoveredStarCounts[session.constellationId] ?? constellation.starCount
-                    let edgeState = edgeRenderState(for: constellation)
-                    ConstellationRenderer(
-                        constellation: constellation,
-                        coordinateMapper: mapper,
-                        discoveredStarCount: visibleCount,
-                        showEdges: true,
-                        edgeProgress: 1,
-                        reduceMotion: accessibility.isReduceMotionEnabled,
-                        highPerformanceMode: highPerformanceMode,
-                        visibleEdgeIndices: edgeState.visibleIndices,
-                        edgeVisibilityOverrides: edgeState.visibilityOverrides,
-                        starStyle: starStyle,
-                        activeBirthEffect: activeStarBirthEffect?.constellationId == constellation.id ? activeStarBirthEffect : nil
-                    )
-                }
+
+            ZStack(alignment: .topLeading) {
+                settledConstellationLayer(mapper: mapper, animationTime: animationTime)
+                dailyRewardLayer(mapper: mapper)
+                liveSessionLayer(mapper: mapper, animationTime: animationTime)
+            }
+            .frame(width: size.width, height: size.height)
+    }
+
+    @ViewBuilder
+    private func settledConstellationLayer(mapper: MySkyCoordinateMapper, animationTime: TimeInterval?) -> some View {
+        let completionConstellationId = completionConstellation?.id
+        let liveConstellationId = livePresentationState.constellationId
+
+        let settledItems: [SettledConstellationsCanvas.Item] = sessionStore.completedSessions.compactMap { session in
+            guard completionConstellationId != session.constellationId,
+                  liveConstellationId != session.constellationId,
+                  let constellation = constellationById(session.constellationId) else {
+                return nil
             }
 
-            if let running = sessionStore.currentSession, let constellation = constellationById(running.constellationId) {
-                let edgeState = edgeRenderState(for: constellation)
-                ConstellationRenderer(constellation: constellation, coordinateMapper: mapper, discoveredStarCount: running.discoveredStarCount, showEdges: true, edgeProgress: 1, reduceMotion: accessibility.isReduceMotionEnabled, highPerformanceMode: highPerformanceMode, visibleEdgeIndices: edgeState.visibleIndices, edgeVisibilityOverrides: edgeState.visibilityOverrides, starStyle: starStyle, activeBirthEffect: activeStarBirthEffect?.constellationId == constellation.id ? activeStarBirthEffect : nil)
+            let visibleCount = skyState.visibleDiscoveredStarCounts[session.constellationId] ?? constellation.starCount
+            let edgeState = edgeRenderState(for: constellation)
+            return SettledConstellationsCanvas.Item(
+                constellation: constellation,
+                discoveredStarCount: visibleCount,
+                visibleEdgeIndices: edgeState.visibleIndices,
+                edgeVisibilityOverrides: edgeState.visibilityOverrides
+            )
+        }
+
+        if !settledItems.isEmpty {
+            SettledConstellationsCanvas(
+                items: settledItems,
+                coordinateMapper: mapper,
+                camera: cameraState,
+                starStyle: starStyle,
+                reduceMotion: accessibility.isReduceMotionEnabled,
+                highPerformanceMode: highPerformanceMode,
+                animationTime: animationTime
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func dailyRewardLayer(mapper: MySkyCoordinateMapper) -> some View {
+        ForEach(dailyStars) { item in
+            let screenPoint = mapper.screenPoint(fromSky: item.position, camera: cameraState)
+
+            DailyRewardStarNode()
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                        if selectedDailyStar?.id == item.id {
+                            selectedDailyStar = nil
+                        } else {
+                            selectedDailyStar = item
+                        }
+                    }
+                }
+                .position(screenPoint)
+
+            if selectedDailyStar?.id == item.id {
+                VStack(spacing: 4) {
+                    Text("✨ 일일 세션 완료")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.yellow)
+                    Text(item.date.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                .position(x: screenPoint.x, y: screenPoint.y - 50)
+                .zIndex(100)
+                .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
             }
-        }.frame(width: size.width, height: size.height)
+        }
+    }
+
+    @ViewBuilder
+    private func liveSessionLayer(mapper: MySkyCoordinateMapper, animationTime: TimeInterval?) -> some View {
+        if let liveConstellationId = livePresentationState.constellationId,
+           let constellation = constellationById(liveConstellationId) {
+            let edgeState = edgeRenderState(for: constellation)
+            let presentation = focusSessionPresentation(for: constellation)
+            let hasBirthEffect = activeStarBirthEffect?.constellationId == constellation.id
+
+            ConstellationRenderer(
+                constellation: constellation,
+                coordinateMapper: mapper,
+                camera: cameraState,
+                discoveredStarCount: presentation.committedDiscoveredCount,
+                showEdges: true,
+                edgeProgress: 1,
+                reduceMotion: accessibility.isReduceMotionEnabled,
+                highPerformanceMode: highPerformanceMode,
+                discoveredStarIndices: presentation.discoveredStarIndices,
+                visibleEdgeIndices: edgeState.visibleIndices,
+                edgeVisibilityOverrides: edgeState.visibilityOverrides,
+                starStyle: starStyle,
+                activeBirthEffect: hasBirthEffect ? activeStarBirthEffect : nil,
+                animationTime: animationTime
+            )
+        }
     }
 
     @ViewBuilder
@@ -922,7 +1326,7 @@ struct MySkyView: View {
         let mapper = coordinateMapper(for: size)
         if let rewardCenter = dailyStarRippleCenter {
             RippleEffectView(
-                position: mapper.worldPoint(fromNormalized: rewardCenter),
+                position: mapper.screenPoint(fromSky: rewardCenter, camera: cameraState),
                 reduceMotion: accessibility.isReduceMotionEnabled
             )
             .id("daily-ripple-\(spawnEffectToken)")
@@ -933,23 +1337,12 @@ struct MySkyView: View {
     private func insertUserConstellationAsCompleted(id: String) {
         Task { @MainActor in
             Self.logger.notice("attempting dev constellation placement id=\(id, privacy: .public)")
-            let preferredPlacement = await repository.fetchInsertedUserConstellation(
+            let inserted = await repository.fetchInsertedUserConstellation(
                 id: id,
                 userId: localConstellationUserId,
-                occupied: placedConstellations,
+                occupied: skyState.constellations,
                 randomSeed: Int64(userSeed)
             )
-            let inserted: Constellation?
-            if let preferredPlacement {
-                inserted = preferredPlacement
-            } else {
-                inserted = await repository.fetchInsertedUserConstellation(
-                    id: id,
-                    userId: localConstellationUserId,
-                    occupied: placedConstellations,
-                    randomSeed: Int64(userSeed)
-                )
-            }
 
             guard let constellation = inserted else {
                 Self.logger.error("dev constellation placement failed id=\(id, privacy: .public)")
@@ -966,7 +1359,7 @@ struct MySkyView: View {
         let existingIds = Set(sessionStore.completedSessions.map(\.constellationId))
         let insertedConstellations = await repository.fetchCustomConstellations(
             userId: localConstellationUserId,
-            occupied: placedConstellations,
+            occupied: skyState.constellations,
             randomSeed: Int64(userSeed)
         )
 
@@ -980,21 +1373,13 @@ struct MySkyView: View {
 
     @MainActor
     private func applyInsertedConstellationAsCompleted(_ constellation: Constellation, selectSession: Bool) {
-        let endedAt = Date()
-        let startedAt = endedAt.addingTimeInterval(-25 * 60)
-        let completedSession = FocusSession(
-            startedAt: startedAt,
-            endedAt: endedAt,
-            slotSeconds: 25 * 60,
-            constellationId: constellation.id,
-            discoveredStarCount: constellation.starCount,
-            status: .completed,
-            memo: nil
-        )
-
-        // Dev insertion should behave like a finished focus session already present in the sky.
         Self.logger.notice("applying inserted constellation as completed constellationId=\(constellation.id.uuidString, privacy: .public) selectSession=\(selectSession)")
-        applyCompletedSessionToSky(completedSession, constellation: constellation, selectSession: selectSession)
+        applySkippedCompletedConstellation(
+            constellation,
+            slotSeconds: 25 * 60,
+            memo: SessionMemo(topicTags: ["dev", "inserted"], rating: 5, freeText: "Developer inserted constellation"),
+            selectSession: selectSession
+        )
     }
 
     @MainActor
@@ -1003,22 +1388,133 @@ struct MySkyView: View {
         constellation: Constellation,
         selectSession: Bool
     ) {
-        if !placedConstellations.contains(where: { $0.id == constellation.id }) {
-            placedConstellations.append(constellation)
-        }
+        skyState.upsertConstellation(constellation)
 
         sessionStore.appendCompletedSession(session)
         Self.logger.notice("completed session applied constellationId=\(constellation.id.uuidString, privacy: .public) sessionId=\(session.id.uuidString, privacy: .public) discovered=\(session.discoveredStarCount)")
-        visibleDiscoveredStarCounts[constellation.id] = session.discoveredStarCount
-        edgeRevealStates[constellation.id] = EdgeRevealState(
+        skyState.setVisibleDiscoveredCount(session.discoveredStarCount, for: constellation.id)
+        skyState.setEdgeRevealState(
+            MySkyEdgeRevealState(
             committedDiscoveredCount: session.discoveredStarCount,
             pendingDiscoveredCount: nil,
             progress: 0
+            ),
+            for: constellation.id
         )
 
         if selectSession {
             selectedSession = session
         }
+    }
+
+    @MainActor
+    private func resetPlacementProbe() {
+        guard !placementProbeConstellationIds.isEmpty else {
+            placementProbeStep = 0
+            placementProbeLastResult = nil
+            return
+        }
+
+        skyState.removeConstellations(ids: placementProbeConstellationIds)
+        sessionStore.removeCompletedSessions(constellationIds: placementProbeConstellationIds)
+        edgeRevealTokens = edgeRevealTokens.filter { !placementProbeConstellationIds.contains($0.key) }
+
+        if let selectedSession, placementProbeConstellationIds.contains(selectedSession.constellationId) {
+            self.selectedSession = nil
+        }
+
+        placementProbeConstellationIds.removeAll()
+        placementProbeStep = 0
+        placementProbeLastResult = nil
+    }
+
+    private func placeNextProbeConstellation() {
+        Task { @MainActor in
+            let placementKey = "probe-\(placementProbeStep)"
+            let template = ConstellationPlacementFixture.template(
+                placementProbeTemplateKind,
+                id: 100 + placementProbeStep
+            )
+            let constellation = repository.placeRemoteConstellation(
+                template: template,
+                placementKey: placementKey,
+                occupied: skyState.constellations,
+                randomSeed: Int64(placementProbeSeedText) ?? 777
+            )
+            placementProbeStep += 1
+
+            guard let constellation else {
+                placementProbeLastResult = PlacementProbeResult(
+                    step: placementProbeStep,
+                    constellationId: nil,
+                    placementKey: placementKey,
+                    overlapDetected: false,
+                    representativePoint: nil,
+                    message: "placement=nil"
+                )
+                return
+            }
+
+            let overlapDetected = MySkyPolygonGeometry.hasPolygonOverlap(candidate: constellation, occupied: skyState.constellations)
+            applyProbeConstellationToSky(constellation)
+            placementProbeConstellationIds.insert(constellation.id)
+            placementProbeLastResult = PlacementProbeResult(
+                step: placementProbeStep,
+                constellationId: constellation.id,
+                placementKey: placementKey,
+                overlapDetected: overlapDetected,
+                representativePoint: constellation.representativePoint,
+                message: "placed=\(constellation.name)"
+            )
+        }
+    }
+
+    private func placeNextProbeConstellationBatch() {
+        for _ in 0..<placementProbeBatchCount {
+            placeNextProbeConstellation()
+        }
+    }
+
+    @MainActor
+    private func applyProbeConstellationToSky(_ constellation: Constellation) {
+        applySkippedCompletedConstellation(
+            constellation,
+            slotSeconds: 15 * 60,
+            memo: SessionMemo(topicTags: ["dev", "placement"], rating: 5, freeText: "Placement probe"),
+            selectSession: false
+        )
+    }
+
+    @MainActor
+    private func applySkippedCompletedConstellation(
+        _ constellation: Constellation,
+        slotSeconds: Int,
+        memo: SessionMemo?,
+        selectSession: Bool
+    ) {
+        let session = skippedCompletedSession(
+            constellation: constellation,
+            slotSeconds: slotSeconds,
+            memo: memo
+        )
+        applyCompletedSessionToSky(session, constellation: constellation, selectSession: selectSession)
+    }
+
+    private func skippedCompletedSession(
+        constellation: Constellation,
+        slotSeconds: Int,
+        memo: SessionMemo?
+    ) -> FocusSession {
+        let endedAt = Date()
+        return FocusSession(
+            startedAt: endedAt.addingTimeInterval(TimeInterval(-slotSeconds)),
+            endedAt: endedAt,
+            slotSeconds: slotSeconds,
+            constellationId: constellation.id,
+            discoveredStarCount: constellation.starCount,
+            status: .completed,
+            memo: memo
+        )
     }
 
     @ViewBuilder
@@ -1051,23 +1547,9 @@ struct MySkyView: View {
                 // 서버의 임시 데이터가 우리가 기기에 예쁘게 저장해둔 별 위치와 시간을 덮어쓰지 못하게 막습니다.
                 // 이제 onAppear에서 부른 parseDailyStars()의 데이터가 절대적으로 유지됩니다.
 
-                let mergedSky = mergeRemoteSkyWithLocalState(sky)
-                remoteFocusLayoutItems = mergedSky.remoteFocusLayoutItems
-                placedConstellations = mergedSky.constellations
+                let mergedSky = stateMerger.mergeRemoteSkyWithLocalState(sky)
+                skyState.replace(snapshot: mergedSky)
                 sessionStore.replaceCompletedSessions(mergedSky.completedSessions)
-                visibleDiscoveredStarCounts = Dictionary(uniqueKeysWithValues: mergedSky.completedSessions.map { ($0.constellationId, $0.discoveredStarCount) })
-                edgeRevealStates = Dictionary(
-                    uniqueKeysWithValues: mergedSky.completedSessions.map {
-                        (
-                            $0.constellationId,
-                            EdgeRevealState(
-                                committedDiscoveredCount: $0.discoveredStarCount,
-                                pendingDiscoveredCount: nil,
-                                progress: 0
-                            )
-                        )
-                    }
-                )
             } catch {
                 Self.logger.error("sky fetch failed: \(error.localizedDescription)")
             }
@@ -1077,101 +1559,19 @@ struct MySkyView: View {
         userId.isEmpty ? fallbackLocalUserId : userId
     }
 
-    private func mergeRemoteSkyWithLocalState(_ remoteSky: MySkySnapshot) -> MySkySnapshot {
-        let remoteServerSessionIds = Set(remoteSky.completedSessions.compactMap(\.serverSessionId))
-        let localSessionsToPreserve = sessionStore.completedSessions.filter { session in
-            guard let constellation = placedConstellations.first(where: { $0.id == session.constellationId }) else {
-                return false
-            }
-
-            _ = constellation
-            guard let serverSessionId = session.serverSessionId else {
-                return true
-            }
-
-            return !remoteServerSessionIds.contains(serverSessionId)
-        }
-
-        let localConstellationsToPreserve = localSessionsToPreserve.compactMap { session in
-            placedConstellations.first(where: { $0.id == session.constellationId })
-        }
-
-        let mergedSessions = mergedFocusSessions(remote: remoteSky.completedSessions, local: localSessionsToPreserve)
-        let mergedConstellations = mergedConstellations(remote: remoteSky.constellations, local: localConstellationsToPreserve)
-
-        return MySkySnapshot(
-            seed: remoteSky.seed,
-            dailyStars: remoteSky.dailyStars,
-            remoteFocusLayoutItems: remoteSky.remoteFocusLayoutItems,
-            completedSessions: mergedSessions,
-            constellations: mergedConstellations
-        )
-    }
-
     private func rebuildRemoteFocusLayout() {
-        let layout = viewModel.layoutFocusConstellations(remoteFocusLayoutItems, userSeed: Int64(userSeed))
+        let layout = viewModel.layoutFocusConstellations(skyState.remoteFocusLayoutItems, userSeed: Int64(userSeed))
         applyRemoteFocusLayout(layout)
     }
 
     private func applyRemoteFocusLayout(_ layout: [FocusSkyLayoutResult]) {
-        let remoteCompletedSessions = layout
-            .filter { $0.item.status == .completed }
-            .map(\.session)
-        let remoteConstellations = layout.map(\.constellation)
-        let remoteSessionIds = Set(layout.map { $0.item.sessionId })
-
-        let localSessions = preservedLocalSessions(excludingRemoteSessionIds: remoteSessionIds)
-        let localConstellations = localSessions.compactMap { session in
-            placedConstellations.first(where: { $0.id == session.constellationId })
-        }
-
-        placedConstellations = mergedConstellations(remote: remoteConstellations, local: localConstellations)
-        sessionStore.replaceCompletedSessions(mergedFocusSessions(remote: remoteCompletedSessions, local: localSessions))
-    }
-
-    private func preservedLocalSessions(excludingRemoteSessionIds remoteSessionIds: Set<String>) -> [FocusSession] {
-        sessionStore.completedSessions.filter { session in
-            guard placedConstellations.contains(where: { $0.id == session.constellationId }) else {
-                return false
-            }
-
-            guard let serverSessionId = session.serverSessionId else {
-                return true
-            }
-
-            return !remoteSessionIds.contains(serverSessionId)
-        }
-    }
-
-    private func mergedFocusSessions(remote: [FocusSession], local: [FocusSession]) -> [FocusSession] {
-        var result: [FocusSession] = remote
-        let existingKeys = Set(remote.map(sessionIdentityKey))
-
-        for session in local where !existingKeys.contains(sessionIdentityKey(session)) {
-            result.append(session)
-        }
-
-        return result.sorted { lhs, rhs in
-            (lhs.endedAt ?? lhs.startedAt) > (rhs.endedAt ?? rhs.startedAt)
-        }
-    }
-
-    private func mergedConstellations(remote: [Constellation], local: [Constellation]) -> [Constellation] {
-        var result: [Constellation] = remote
-        var seenIds = Set(remote.map(\.id))
-
-        for constellation in local where seenIds.insert(constellation.id).inserted {
-            result.append(constellation)
-        }
-
-        return result
-    }
-
-    private func sessionIdentityKey(_ session: FocusSession) -> String {
-        if let serverSessionId = session.serverSessionId {
-            return "server:\(serverSessionId)"
-        }
-        return "local:\(session.id.uuidString)"
+        let merged = stateMerger.mergeLayout(layout)
+        skyState.replaceRemoteLayoutItems(layout.map(\.item))
+        skyState.replaceMergedWorld(
+            constellations: merged.constellations,
+            completedSessions: merged.completedSessions
+        )
+        sessionStore.replaceCompletedSessions(merged.completedSessions)
     }
 
     @MainActor
@@ -1199,7 +1599,9 @@ struct MySkyView: View {
         do {
             try await viewModel.saveCompletedSession(request)
             sessionStore.updateMemo(sessionId: pendingMemoSessionId, memo: memo)
-            await refreshSky()
+            // Keep the just-completed constellation stable on screen.
+            // Re-fetching and re-laying out immediately after memo save can remap
+            // completed sessions and cause a visible position jump.
             return true
         } catch {
             Self.logger.error("focus save failed: \(error.localizedDescription)")
