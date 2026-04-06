@@ -34,9 +34,12 @@ struct Constellation: Identifiable, Hashable {
         } else if stars.isEmpty {
             self.representativePoint = CGPoint(x: 0.5, y: 0.5)
         } else {
-            let cx = stars.map(\.x).reduce(0, +) / CGFloat(stars.count)
-            let cy = stars.map(\.y).reduce(0, +) / CGFloat(stars.count)
-            self.representativePoint = CGPoint(x: cx, y: cy)
+            let xs = stars.map(\.x)
+            let ys = stars.map(\.y)
+            self.representativePoint = CGPoint(
+                x: ((xs.min() ?? 0.5) + (xs.max() ?? 0.5)) / 2,
+                y: ((ys.min() ?? 0.5) + (ys.max() ?? 0.5)) / 2
+            )
         }
         self.stars = stars
         self.edges = edges

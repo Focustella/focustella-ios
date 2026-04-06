@@ -2,6 +2,7 @@ import SwiftUI
 
 final class ConstellationRepository {
     private static let sharedService = MockConstellationService()
+    private let placementHullPadding: CGFloat = 0.05
     private let service: MockConstellationService
 
     init(service: MockConstellationService = ConstellationRepository.sharedService) {
@@ -11,7 +12,7 @@ final class ConstellationRepository {
     func fetchSessionConstellation(durationSeconds: Int, occupied: [Constellation], userId: String, randomSeed: Int64) async -> Constellation? {
         let payloads = await service.fetchConstellationCandidates(durationSeconds: durationSeconds, userId: userId)
         for payload in payloads {
-            if let constellation = place(payload: payload, occupied: occupied, randomSeed: randomSeed) {
+            if let constellation = placeWithRetries(payload: payload, occupied: occupied, randomSeed: randomSeed) {
                 return constellation
             }
         }
@@ -23,7 +24,7 @@ final class ConstellationRepository {
         var placed: [Constellation] = []
         var occupiedAll = occupied
         for payload in payloads {
-            if let constellation = place(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
+            if let constellation = placeWithRetries(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
                 placed.append(constellation)
                 occupiedAll.append(constellation)
             }
@@ -37,7 +38,7 @@ final class ConstellationRepository {
         var occupiedAll = occupied
 
         for payload in payloads {
-            let constellation = place(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) ?? place(payload: payload, occupied: [], randomSeed: randomSeed)
+            let constellation = placeWithRetries(payload: payload, occupied: occupiedAll, randomSeed: randomSeed)
             guard let constellation else { continue }
             placed.append(constellation)
             occupiedAll.append(constellation)
@@ -51,7 +52,7 @@ final class ConstellationRepository {
         var placed: [Constellation] = []
         var occupiedAll = occupied
         for payload in payloads {
-            if let constellation = place(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
+            if let constellation = placeWithRetries(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
                 placed.append(constellation)
                 occupiedAll.append(constellation)
             }
@@ -63,7 +64,7 @@ final class ConstellationRepository {
         guard let payload = await service.fetchCustomConstellation(id: id, userId: userId) else {
             return nil
         }
-        return place(payload: payload, occupied: occupied, randomSeed: randomSeed) ?? place(payload: payload, occupied: [], randomSeed: randomSeed)
+        return placeWithRetries(payload: payload, occupied: occupied, randomSeed: randomSeed)
     }
 
     func placeRemoteConstellation(
@@ -88,7 +89,7 @@ final class ConstellationRepository {
             serverId: template.id
         )
 
-        return place(payload: payload, occupied: occupied, randomSeed: randomSeed) ?? place(payload: payload, occupied: [], randomSeed: randomSeed)
+        return placeWithRetries(payload: payload, occupied: occupied, randomSeed: randomSeed)
     }
 
     func insertUserConstellation(
@@ -142,28 +143,47 @@ final class ConstellationRepository {
         return payload.id
     }
 
-    private func place(payload: ServerConstellationPayload, occupied: [Constellation], randomSeed: Int64) -> Constellation? {
+    private func placeWithRetries(payload: ServerConstellationPayload, occupied: [Constellation], randomSeed: Int64) -> Constellation? {
+        let baseSeed = pureSeed(randomSeed)
+
+        for pass in 0..<12 {
+            let derivedSeed = mixedSeed(baseSeed, salt: "\(payload.id)|\(pass)")
+            let bounds = placementBounds(for: occupied, pass: pass)
+            if let constellation = place(payload: payload, occupied: occupied, randomSeed: derivedSeed, bounds: bounds) {
+                return constellation
+            }
+        }
+
+        return nil
+    }
+
+    private func place(
+        payload: ServerConstellationPayload,
+        occupied: [Constellation],
+        randomSeed: UInt64,
+        bounds: PlacementBounds
+    ) -> Constellation? {
         let existingMeta = occupied.map { constellation in
             let points = constellation.stars.map { CGPoint(x: $0.x, y: $0.y) }
-            let rep = constellation.representativePoint
-            let radius = (points.map { hypot($0.x - rep.x, $0.y - rep.y) }.max() ?? 0) + 0.035
-            return OccupiedConstellation(rep: rep, radius: radius, hull: paddedHull(convexHull(points), padding: 0.02))
+            return OccupiedConstellation(
+                hull: paddedHull(convexHull(points), padding: placementHullPadding)
+            )
         }
 
         var rng = SeededGenerator(seed: pureSeed(randomSeed))
         let baseAngle = rng.nextCGFloat(in: 0...(CGFloat.pi * 2))
-        let baseRadius = rng.nextCGFloat(in: 0.12...0.42)
-        let radiusSpread = rng.nextCGFloat(in: 0.08...0.18)
-        let angleJitter = rng.nextCGFloat(in: -0.32...0.32)
-        let aspectBias = rng.nextCGFloat(in: 0.82...1.08)
+        let baseRadius = rng.nextCGFloat(in: 0.0...0.34)
+        let radiusSpread = rng.nextCGFloat(in: 0.28...0.62)
+        let angleJitter = rng.nextCGFloat(in: -0.5...0.5)
+        let aspectBias = rng.nextCGFloat(in: 0.72...1.28)
 
-        for attempt in 0..<520 {
-            let t = CGFloat(attempt) / 520
+        for attempt in 0..<720 {
+            let t = CGFloat(attempt) / 720
             let angle = baseAngle + angleJitter + CGFloat(attempt) * 2.399963
-            let radius = min(0.46, baseRadius + t * radiusSpread)
+            let radius = attempt == 0 ? 0 : min(0.72, baseRadius + t * radiusSpread)
             let center = CGPoint(
-                x: 0.5 + cos(angle) * radius,
-                y: 0.5 + sin(angle) * radius * aspectBias
+                x: bounds.center.x + cos(angle) * radius * bounds.horizontalScale,
+                y: bounds.center.y + sin(angle) * radius * aspectBias * bounds.verticalScale
             )
             let rotation = payload.id.hasPrefix("custom-") ? 0 : rng.nextCGFloat(in: (-.pi)...(.pi))
 
@@ -171,14 +191,9 @@ final class ConstellationRepository {
             let points = transformed.points
             let rep = transformed.representative
 
-            guard isInsideBounds(points) else { continue }
+            guard isInsideBounds(points, bounds: bounds) else { continue }
 
-            let collisionRadius = (points.map { hypot($0.x - rep.x, $0.y - rep.y) }.max() ?? 0) + 0.035
-            if existingMeta.contains(where: { hypot($0.rep.x - rep.x, $0.rep.y - rep.y) < ($0.radius + collisionRadius) }) {
-                continue
-            }
-
-            let hull = paddedHull(convexHull(points), padding: 0.02)
+            let hull = paddedHull(convexHull(points), padding: placementHullPadding)
             if existingMeta.contains(where: { hullsOverlap(hull, $0.hull) }) {
                 continue
             }
@@ -210,9 +225,6 @@ final class ConstellationRepository {
         let c = cos(rotation)
         let s = sin(rotation)
 
-        // Placement center is the absolute representative point for this user's sky.
-        let representative = center
-
         var stars: [Star] = []
         var points: [CGPoint] = []
         stars.reserveCapacity(payload.stars.count)
@@ -224,12 +236,24 @@ final class ConstellationRepository {
                 x: rv.x * c - rv.y * s,
                 y: rv.x * s + rv.y * c
             )
-            let absolute = CGPoint(x: representative.x + rotatedVector.x, y: representative.y + rotatedVector.y)
+            let absolute = CGPoint(x: center.x + rotatedVector.x, y: center.y + rotatedVector.y)
 
             // deterministic UUID by server star id
             let starUUID = UUID(uuidString: deterministicUUIDString(input: "\(payload.id)|\(serverStar.id)")) ?? UUID()
             stars.append(Star(id: starUUID, x: absolute.x, y: absolute.y))
             points.append(absolute)
+        }
+
+        let representative: CGPoint
+        if points.isEmpty {
+            representative = center
+        } else {
+            let xs = points.map(\.x)
+            let ys = points.map(\.y)
+            representative = CGPoint(
+                x: ((xs.min() ?? center.x) + (xs.max() ?? center.x)) / 2,
+                y: ((ys.min() ?? center.y) + (ys.max() ?? center.y)) / 2
+            )
         }
 
         return (stars, points, representative)
@@ -246,8 +270,47 @@ final class ConstellationRepository {
         return raw == 0 ? 0x9E37 : raw
     }
 
-    private func isInsideBounds(_ points: [CGPoint]) -> Bool {
-        points.allSatisfy { (0.04...0.96).contains($0.x) && (0.04...0.96).contains($0.y) }
+    private func pureSeed(_ seed: UInt64) -> UInt64 {
+        seed == 0 ? 0x9E37 : seed
+    }
+
+    private func mixedSeed(_ base: UInt64, salt: String) -> UInt64 {
+        var state = base ^ 0x9E37_79B9_7F4A_7C15
+        for byte in salt.utf8 {
+            state ^= UInt64(byte)
+            state &*= 1_099_511_628_211
+            state ^= state >> 32
+        }
+        return pureSeed(state)
+    }
+
+    private func placementBounds(for occupied: [Constellation], pass: Int) -> PlacementBounds {
+        let reps = occupied.map(\.representativePoint)
+        let minX = reps.map(\.x).min() ?? 0.5
+        let maxX = reps.map(\.x).max() ?? 0.5
+        let minY = reps.map(\.y).min() ?? 0.5
+        let maxY = reps.map(\.y).max() ?? 0.5
+
+        let occupiedWidth = max(1.0, maxX - minX)
+        let occupiedHeight = max(1.0, maxY - minY)
+        let expansionStep = CGFloat(pass) * 0.45
+
+        let horizontalScale = (occupiedWidth * 0.5) + 0.6 + expansionStep
+        let verticalScale = (occupiedHeight * 0.5) + 0.9 + expansionStep
+
+        return PlacementBounds(
+            minX: 0.5 - horizontalScale,
+            maxX: 0.5 + horizontalScale,
+            minY: 0.5 - verticalScale,
+            maxY: 0.5 + verticalScale
+        )
+    }
+
+    private func isInsideBounds(_ points: [CGPoint], bounds: PlacementBounds) -> Bool {
+        points.allSatisfy {
+            (bounds.minX...bounds.maxX).contains($0.x) &&
+            (bounds.minY...bounds.maxY).contains($0.y)
+        }
     }
 
     private func convexHull(_ points: [CGPoint]) -> [CGPoint] {
@@ -365,9 +428,26 @@ final class ConstellationRepository {
 }
 
 private struct OccupiedConstellation {
-    let rep: CGPoint
-    let radius: CGFloat
     let hull: [CGPoint]
+}
+
+private struct PlacementBounds {
+    let minX: CGFloat
+    let maxX: CGFloat
+    let minY: CGFloat
+    let maxY: CGFloat
+
+    var center: CGPoint {
+        CGPoint(x: (minX + maxX) * 0.5, y: (minY + maxY) * 0.5)
+    }
+
+    var horizontalScale: CGFloat {
+        max(0.0001, (maxX - minX) * 0.5)
+    }
+
+    var verticalScale: CGFloat {
+        max(0.0001, (maxY - minY) * 0.5)
+    }
 }
 
 private struct SeededGenerator: Sendable {

@@ -4,17 +4,20 @@ import os
 struct SlotPickerSheet: View {
     private static let logger = Logger(subsystem: "focustella-ios", category: "FocusSession")
     let onSelect: (Int) -> Void
+    private let minimumSeconds = 5 * 60
 
     @Environment(\.dismiss) private var dismiss
 
     private let templates: [(title: String, seconds: Int)] = [
+        ("5분", 5 * 60),
+        ("10분", 10 * 60),
         ("30분", 30 * 60),
         ("1시간", 60 * 60),
         ("2시간", 2 * 60 * 60),
         ("4시간", 4 * 60 * 60),
         ("6시간", 6 * 60 * 60)
     ]
-    @State private var totalSeconds: Int = 30 * 60
+    @State private var totalSeconds: Int = 5 * 60
 
     var body: some View {
         NavigationStack {
@@ -53,7 +56,7 @@ struct SlotPickerSheet: View {
                 )
 
                 Button {
-                    let selectedSeconds = max(30 * 60, totalSeconds)
+                    let selectedSeconds = max(minimumSeconds, totalSeconds)
                     Self.logger.notice("slot picker start tapped. selectedSeconds=\(selectedSeconds, privacy: .public)")
                     print("🛰️ [FocusSession] SlotPicker start tapped. selectedSeconds=\(selectedSeconds)")
                     onSelect(selectedSeconds)
@@ -80,14 +83,14 @@ struct SlotPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 Self.logger.notice("slot picker appeared")
-                applyTemplate(30 * 60)
+                applyTemplate(5 * 60)
             }
         }
         .presentationDetents([.height(420)])
     }
 
     private func applyTemplate(_ seconds: Int) {
-        totalSeconds = (max(30 * 60, seconds) / (5 * 60)) * (5 * 60)
+        totalSeconds = (max(minimumSeconds, seconds) / (5 * 60)) * (5 * 60)
     }
 }
 
@@ -167,11 +170,11 @@ private struct CountdownColonPicker: UIViewRepresentable {
             guard component != 1 else { return }
             let hour = pickerView.selectedRow(inComponent: 0)
             let minute = minuteSteps[pickerView.selectedRow(inComponent: 2)]
-            totalSeconds = max(30 * 60, (hour * 3600) + (minute * 60))
+            totalSeconds = max(5 * 60, (hour * 3600) + (minute * 60))
         }
 
         func applySelection(on pickerView: UIPickerView, totalSeconds: Int) {
-            let clamped = max(30 * 60, totalSeconds)
+            let clamped = max(5 * 60, totalSeconds)
             let hour = min(maxHour, clamped / 3600)
             let minute = (clamped % 3600) / 60
             let snappedMinute = (minute / 5) * 5

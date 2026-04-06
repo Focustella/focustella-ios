@@ -392,8 +392,11 @@ actor MockConstellationService {
 
     private static func representativePoint(from points: [CGPoint]) -> CGPoint {
         guard !points.isEmpty else { return .zero }
-        let x = points.map(\.x).reduce(0, +) / CGFloat(points.count)
-        let y = points.map(\.y).reduce(0, +) / CGFloat(points.count)
-        return CGPoint(x: x, y: y)
+        let xs = points.map(\.x)
+        let ys = points.map(\.y)
+        return CGPoint(
+            x: ((xs.min() ?? 0) + (xs.max() ?? 0)) / 2,
+            y: ((ys.min() ?? 0) + (ys.max() ?? 0)) / 2
+        )
     }
 }

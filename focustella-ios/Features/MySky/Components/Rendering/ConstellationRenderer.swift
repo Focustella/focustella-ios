@@ -3,117 +3,143 @@ import SwiftUI
 struct ConstellationRenderer: View {
     let constellation: Constellation
     let coordinateMapper: MySkyCoordinateMapper
+    var camera: MySkyCameraState = .default
     let discoveredStarCount: Int
     let showEdges: Bool
     let edgeProgress: CGFloat
     let reduceMotion: Bool
     let highPerformanceMode: Bool
+    var discoveredStarIndices: Set<Int>? = nil
     var sparklingIndices: Set<Int> = []
     var edgeRevealOrder: [Int]? = nil
     var visibleEdgeIndices: Set<Int>? = nil
     var edgeVisibilityOverrides: [Int: CGFloat]? = nil
     var starStyle: StarAppearanceStyle = .realistic
     var activeBirthEffect: StarBirthEffectState? = nil
+    var animationTime: TimeInterval? = nil
 
     var body: some View {
         let shouldAnimate = highPerformanceMode && !reduceMotion
-        TimelineView(.periodic(from: .now, by: shouldAnimate ? 1.0 / 8.0 : 1.2)) { context in
-            let mapper = coordinateMapper
-            let time = context.date.timeIntervalSinceReferenceDate
-            let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { ($0.id, mapper.worldPoint(for: $0)) })
-            let constellationBase = basePaletteForConstellation()
-            let birthSegments = activeBirthEffect?.connectionPairs.compactMap { pair -> StarBirthSegment? in
-                guard let from = pointsById[pair.fromStarId], let to = pointsById[pair.toStarId] else { return nil }
-                return StarBirthSegment(from: from, to: to)
-            } ?? []
+        let needsTimeline = shouldAnimate || activeBirthEffect != nil
 
-            ZStack {
-                if let activeBirthEffect, !birthSegments.isEmpty {
-                    RendererBirthConnectionsView(
-                        connectionSegments: birthSegments,
-                        reduceMotion: reduceMotion
-                    )
-                    .id("connections-\(activeBirthEffect.token)")
+        Group {
+            if let animationTime {
+                content(time: animationTime, shouldAnimate: shouldAnimate)
+            } else if needsTimeline {
+                TimelineView(.periodic(from: .now, by: shouldAnimate ? 1.0 / 10.0 : 1.0 / 8.0)) { context in
+                    content(time: context.date.timeIntervalSinceReferenceDate, shouldAnimate: shouldAnimate)
                 }
+            } else {
+                content(time: 0, shouldAnimate: false)
+            }
+        }
+        .allowsHitTesting(false)
+    }
 
-                if showEdges {
-                    let edgeCount = max(1, constellation.edges.count)
-                    let reveal = CGFloat(edgeCount) * max(0, min(1, edgeProgress))
-                    let edgePulse = shouldAnimate ? (sin(time * 1.0) + 1) / 2 : 0.35
-                    let edgeOpacity = shouldAnimate ? (0.15 + 0.14 * edgePulse) : 0.18
-                    let edgeGlow = shouldAnimate ? (1.7 + CGFloat(edgePulse) * 1.9) : 1.6
-                    let edgeBaseColor = constellationBase.color
-                    let orderedIndices = edgeRevealOrder ?? Array(constellation.edges.indices)
+    @ViewBuilder
+    private func content(time: TimeInterval, shouldAnimate: Bool) -> some View {
+        let mapper = coordinateMapper
+        let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { star in
+            (
+                star.id,
+                mapper.screenPoint(fromSky: CGPoint(x: star.x, y: star.y), camera: camera)
+            )
+        })
+        let constellationBase = basePaletteForConstellation()
+        let birthSegments = activeBirthEffect?.connectionPairs.compactMap { pair -> StarBirthSegment? in
+            guard let from = pointsById[pair.fromStarId], let to = pointsById[pair.toStarId] else { return nil }
+            return StarBirthSegment(from: from, to: to)
+        } ?? []
 
-                    ForEach(Array(orderedIndices.enumerated()), id: \.offset) { order, edgeIndex in
-                        let isVisible = visibleEdgeIndices?.contains(edgeIndex) ?? true
-                        if constellation.edges.indices.contains(edgeIndex), isVisible {
-                            let local = min(1, max(0, reveal - CGFloat(order)))
-                            if local > 0 {
-                                let eased = local * local * (3 - 2 * local)
-                                let visibility = edgeVisibilityOverrides?[edgeIndex] ?? 1
-                                if visibility > 0 {
-                                    let edge = constellation.edges[edgeIndex]
-                                    if let from = pointsById[edge.from], let to = pointsById[edge.to] {
-                                        Path { path in
-                                            path.move(to: from)
-                                            path.addLine(to: to)
-                                        }
-                                        .stroke(
-                                            edgeBaseColor.opacity(edgeOpacity * eased * visibility),
-                                            style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
-                                        )
-                                        .shadow(
-                                            color: edgeBaseColor.opacity(edgeOpacity * eased * visibility * 0.85),
-                                            radius: edgeGlow * eased
-                                        )
+        ZStack {
+            if let activeBirthEffect, !birthSegments.isEmpty {
+                RendererBirthConnectionsView(
+                    connectionSegments: birthSegments,
+                    reduceMotion: reduceMotion
+                )
+                .id("connections-\(activeBirthEffect.token)")
+            }
+
+            if showEdges {
+                let edgeCount = max(1, constellation.edges.count)
+                let reveal = CGFloat(edgeCount) * max(0, min(1, edgeProgress))
+                let edgePulse = shouldAnimate ? (sin(time * 1.0) + 1) / 2 : 0.35
+                let edgeOpacity = shouldAnimate ? (0.15 + 0.14 * edgePulse) : 0.14
+                let edgeGlow = shouldAnimate ? (1.7 + CGFloat(edgePulse) * 1.9) : 0
+                let edgeBaseColor = constellationBase.color
+                let orderedIndices = edgeRevealOrder ?? Array(constellation.edges.indices)
+
+                ForEach(Array(orderedIndices.enumerated()), id: \.offset) { order, edgeIndex in
+                    let isVisible = visibleEdgeIndices?.contains(edgeIndex) ?? true
+                    if constellation.edges.indices.contains(edgeIndex), isVisible {
+                        let local = min(1, max(0, reveal - CGFloat(order)))
+                        if local > 0 {
+                            let eased = local * local * (3 - 2 * local)
+                            let visibility = edgeVisibilityOverrides?[edgeIndex] ?? 1
+                            if visibility > 0 {
+                                let edge = constellation.edges[edgeIndex]
+                                if let from = pointsById[edge.from], let to = pointsById[edge.to] {
+                                    Path { path in
+                                        path.move(to: from)
+                                        path.addLine(to: to)
                                     }
+                                    .stroke(
+                                        edgeBaseColor.opacity(edgeOpacity * eased * visibility),
+                                        style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
+                                    )
+                                    .shadow(
+                                        color: edgeBaseColor.opacity(edgeOpacity * eased * visibility * 0.85),
+                                        radius: edgeGlow * eased
+                                    )
                                 }
                             }
                         }
                     }
                 }
+            }
 
-                ForEach(Array(constellation.stars.enumerated()), id: \.element.id) { index, star in
-                    let discovered = index < discoveredStarCount
-                    let sparkle = sparklingIndices.contains(index)
-                    let isBirthStar = activeBirthEffect?.starId == star.id
-                    let position = mapper.worldPoint(for: star)
-                    let phaseOffset = Double(star.x * 30 + star.y * 15)
-                    let palette = starPalette(for: index, base: constellationBase)
+            ForEach(Array(constellation.stars.enumerated()), id: \.element.id) { index, star in
+                let discovered = discoveredStarIndices?.contains(index) ?? (index < discoveredStarCount)
+                let sparkle = sparklingIndices.contains(index)
+                let isBirthStar = activeBirthEffect?.starId == star.id
+                let position = mapper.screenPoint(
+                    fromSky: CGPoint(x: star.x, y: star.y),
+                    camera: camera
+                )
+                let phaseOffset = Double(star.x * 30 + star.y * 15)
+                let palette = starPalette(for: index, base: constellationBase)
+                let flareStride = constellation.starCount > 4 ? 12 : 6
 
-                    if discovered || sparkle || isBirthStar {
-                        ZStack {
-                            if isBirthStar, let activeBirthEffect {
-                                RendererRippleBurstView(reduceMotion: reduceMotion)
-                                    .id("ripple-\(activeBirthEffect.token)")
-                                RendererStarBirthIgnitionView(reduceMotion: reduceMotion)
-                                    .id("ignition-\(activeBirthEffect.token)")
-                            }
-
-                            TwinklingStarNode(
-                                position: nil,
-                                size: 11,
-                                phaseOffset: phaseOffset,
-                                color: palette.color,
-                                baseRGB: palette.rgb,
-                                time: time,
-                                reduceMotion: reduceMotion,
-                                boost: sparkle || isBirthStar,
-                                isAnimated: shouldAnimate,
-                                hasFlare: shouldAnimate && (sparkle || isBirthStar || index.isMultiple(of: 6)),
-                                currentStyle: starStyle
-                            )
-                            .opacity((discovered || sparkle) ? 1.0 : 0.001)
+                if discovered || sparkle || isBirthStar {
+                    ZStack {
+                        if isBirthStar, let activeBirthEffect {
+                            RendererRippleBurstView(reduceMotion: reduceMotion)
+                                .id("ripple-\(activeBirthEffect.token)")
+                            RendererStarBirthIgnitionView(reduceMotion: reduceMotion)
+                                .id("ignition-\(activeBirthEffect.token)")
                         }
-                        .position(position)
-                        .allowsHitTesting(false)
+
+                        TwinklingStarNode(
+                            position: nil,
+                            size: 11,
+                            phaseOffset: phaseOffset,
+                            color: palette.color,
+                            baseRGB: palette.rgb,
+                            time: time,
+                            reduceMotion: reduceMotion,
+                            boost: sparkle || isBirthStar,
+                            isAnimated: shouldAnimate,
+                            hasFlare: shouldAnimate && (sparkle || isBirthStar || index.isMultiple(of: flareStride)),
+                            currentStyle: starStyle
+                        )
+                        .opacity((discovered || sparkle) ? 1.0 : 0.001)
                     }
+                    .position(position)
+                    .allowsHitTesting(false)
                 }
             }
-            .frame(width: mapper.canvasSize.width, height: mapper.canvasSize.height)
         }
-        .allowsHitTesting(false)
+        .frame(width: mapper.canvasSize.width, height: mapper.canvasSize.height)
     }
 
     private func starPalette(for index: Int, base: StarPalette) -> StarPalette {
