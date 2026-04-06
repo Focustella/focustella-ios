@@ -2,8 +2,7 @@ import SwiftUI
 
 final class ConstellationRepository {
     private static let sharedService = MockConstellationService()
-    private let placementHullPadding: CGFloat = 0.035
-    private let placementRadiusPadding: CGFloat = 0.05
+    private let placementHullPadding: CGFloat = 0.05
     private let service: MockConstellationService
 
     init(service: MockConstellationService = ConstellationRepository.sharedService) {
@@ -166,11 +165,7 @@ final class ConstellationRepository {
     ) -> Constellation? {
         let existingMeta = occupied.map { constellation in
             let points = constellation.stars.map { CGPoint(x: $0.x, y: $0.y) }
-            let rep = constellation.representativePoint
-            let radius = (points.map { hypot($0.x - rep.x, $0.y - rep.y) }.max() ?? 0) + placementRadiusPadding
             return OccupiedConstellation(
-                rep: rep,
-                radius: radius,
                 hull: paddedHull(convexHull(points), padding: placementHullPadding)
             )
         }
@@ -197,11 +192,6 @@ final class ConstellationRepository {
             let rep = transformed.representative
 
             guard isInsideBounds(points, bounds: bounds) else { continue }
-
-            let collisionRadius = (points.map { hypot($0.x - rep.x, $0.y - rep.y) }.max() ?? 0) + placementRadiusPadding
-            if existingMeta.contains(where: { hypot($0.rep.x - rep.x, $0.rep.y - rep.y) < ($0.radius + collisionRadius) }) {
-                continue
-            }
 
             let hull = paddedHull(convexHull(points), padding: placementHullPadding)
             if existingMeta.contains(where: { hullsOverlap(hull, $0.hull) }) {
@@ -438,8 +428,6 @@ final class ConstellationRepository {
 }
 
 private struct OccupiedConstellation {
-    let rep: CGPoint
-    let radius: CGFloat
     let hull: [CGPoint]
 }
 

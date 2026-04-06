@@ -36,34 +36,45 @@ struct MySkyFocusSessionPresentation {
             hypot(constellation.stars[index].x - focus.x, constellation.stars[index].y - focus.y)
         }
 
-        var queue: [Int] = [startIndex]
-        var visited: Set<Int> = [startIndex]
-        var order: [Int] = []
-
-        while !queue.isEmpty {
-            let current = queue.removeFirst()
-            order.append(current)
-
-            let neighbors = adjacency[current, default: []].sorted { lhs, rhs in
-                let lhsDistance = distanceToFocus(lhs)
-                let rhsDistance = distanceToFocus(rhs)
-                if lhsDistance == rhsDistance { return lhs < rhs }
-                return lhsDistance < rhsDistance
-            }
-
-            for neighbor in neighbors where !visited.contains(neighbor) {
-                visited.insert(neighbor)
-                queue.append(neighbor)
-            }
-        }
-
-        let remaining = constellation.stars.indices.filter { !visited.contains($0) }.sorted { lhs, rhs in
+        func starOrderPriority(_ lhs: Int, _ rhs: Int) -> Bool {
             let lhsDistance = distanceToFocus(lhs)
             let rhsDistance = distanceToFocus(rhs)
             if lhsDistance == rhsDistance { return lhs < rhs }
             return lhsDistance < rhsDistance
         }
-        order.append(contentsOf: remaining)
+
+        var visited: Set<Int> = []
+        var order: [Int] = []
+
+        func traverseDepthFirst(from root: Int) {
+            var stack: [Int] = [root]
+            while let current = stack.popLast() {
+                guard !visited.contains(current) else { continue }
+                visited.insert(current)
+                order.append(current)
+
+                let neighbors = adjacency[current, default: []]
+                    .filter { !visited.contains($0) }
+                    .sorted(by: starOrderPriority)
+
+                // Stack is LIFO, so reverse to visit nearest neighbors first.
+                for neighbor in neighbors.reversed() {
+                    stack.append(neighbor)
+                }
+            }
+        }
+
+        traverseDepthFirst(from: startIndex)
+
+        while visited.count < constellation.stars.count {
+            guard let nextRoot = constellation.stars.indices
+                .filter({ !visited.contains($0) })
+                .min(by: starOrderPriority) else {
+                break
+            }
+            traverseDepthFirst(from: nextRoot)
+        }
+
         return order
     }
 
