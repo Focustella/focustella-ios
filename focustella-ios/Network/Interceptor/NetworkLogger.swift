@@ -23,9 +23,8 @@ enum NetworkLogger {
     private static func preview(_ data: Data?) -> String {
         guard let data, !data.isEmpty else { return "-" }
         if let object = try? JSONSerialization.jsonObject(with: data),
-           let prettyData = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]),
-           let pretty = String(data: prettyData, encoding: .utf8) {
-            return clamp(pretty)
+           JSONSerialization.isValidJSONObject(object) {
+            return LogJSONFormatter.pretty(object, maxLength: 1_600)
         }
 
         let raw = String(data: data, encoding: .utf8) ?? "<non-utf8>"

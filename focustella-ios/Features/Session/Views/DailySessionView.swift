@@ -4,17 +4,32 @@ import SwiftUI
 struct DailySessionView: View {
     @Environment(\.scenePhase) private var scenePhase // 앱 상태 감지용
     @Environment(\.dismiss) private var dismiss
-    
-    @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
-    // 🔥 1. 만능 뷰모델 1개를 지우고, 용도별로 3개로 나누어 선언합니다!
-    @StateObject private var activeViewModel = ActiveSessionViewModel()
-    @StateObject private var templateViewModel = TemplateViewModel()
-    @StateObject private var historyViewModel = SessionHistoryViewModel()
+
+    private let hasSeenTutorial: Bool
+    @StateObject private var activeViewModel: ActiveSessionViewModel
+    @StateObject private var templateViewModel: TemplateViewModel
+    @StateObject private var historyViewModel: SessionHistoryViewModel
     
     @State private var showingAddTemplate = false
     @State private var templateToEdit: ChecklistTemplate?
     @State private var showingHistorySheet = false
     @State private var showingCancelAlert = false
+
+    init(
+        hasSeenTutorial: Bool,
+        dependencies: SessionFeatureDependencies = .live
+    ) {
+        self.hasSeenTutorial = hasSeenTutorial
+        _activeViewModel = StateObject(
+            wrappedValue: dependencies.makeActiveSessionViewModel()
+        )
+        _templateViewModel = StateObject(
+            wrappedValue: dependencies.makeTemplateViewModel()
+        )
+        _historyViewModel = StateObject(
+            wrappedValue: dependencies.makeSessionHistoryViewModel()
+        )
+    }
     
     var body: some View {
         NavigationStack {
@@ -32,14 +47,18 @@ struct DailySessionView: View {
                     }
                 } else {
                     if activeViewModel.isSessionActive {
-                        ActiveSessionView(viewModel: activeViewModel)
+                        ActiveSessionView(
+                            viewModel: activeViewModel,
+                            hasSeenTutorial: hasSeenTutorial
+                        )
                     } else {
                         // 🔥 3. 아까 수정했던 대로 두 개의 뷰모델을 넘겨줍니다!
                         TemplateSelectionView(
                             templateViewModel: templateViewModel,
                             activeViewModel: activeViewModel,
                             showingAddTemplate: $showingAddTemplate,
-                            templateToEdit: $templateToEdit
+                            templateToEdit: $templateToEdit,
+                            hasSeenTutorial: hasSeenTutorial
                         )
                     }
                 }
@@ -77,7 +96,7 @@ struct DailySessionView: View {
                     dismiss() // 1. 일일 세션 창 닫기
                     
                     // 2. MySkyView에 "별을 만들어라!" 하고 방송하기
-                    NotificationCenter.default.post(name: Notification.Name("DailySessionCompleted"), object: nil)
+                    NotificationCenter.default.post(name: .dailySessionCompleted, object: nil)
                 }
             }
             .alert("세션 취소", isPresented: $showingCancelAlert) {

@@ -1,5 +1,5 @@
 // 📂 Features/Session/ViewModels/SessionHistoryViewModel.swift
-import SwiftUI
+import Foundation
 import Combine
 
 @MainActor
@@ -9,7 +9,7 @@ final class SessionHistoryViewModel: ObservableObject {
     @Published var fetchedSessions: [FetchedDailySession] = []
     @Published var isFetchingHistory: Bool = false
     
-    init(fetchDailySessionsUseCase: FetchDailySessionsUseCase = FetchDailySessionsUseCase(repository: DailySessionRepositoryImpl())) {
+    init(fetchDailySessionsUseCase: FetchDailySessionsUseCase) {
         self.fetchDailySessionsUseCase = fetchDailySessionsUseCase
     }
     

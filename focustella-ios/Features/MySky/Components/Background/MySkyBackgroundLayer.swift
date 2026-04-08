@@ -58,6 +58,10 @@ struct MySkyBackgroundLayer: View {
             return .mySkyFocusStar
         case .legacy:
             return .mySkyLegacy
+        case .aurora:
+            return .mySkyAurora
+        case .deepSpace:
+            return .mySkyDeepSpace
         }
     }
 }

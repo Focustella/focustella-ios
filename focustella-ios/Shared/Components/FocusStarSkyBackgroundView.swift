@@ -21,7 +21,11 @@ struct FocusStarSkyBackgroundView: View {
                 .blur(radius: 86)
                 .offset(x: 160, y: 340)
 
-            NightSkyStarField(seed: 20260308, count: 96)
+            NightSkyStarField(
+                count: 96,
+                salt: "background-focus-star",
+                profile: .standard
+            )
         }
         .allowsHitTesting(false)
     }

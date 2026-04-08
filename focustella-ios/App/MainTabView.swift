@@ -16,10 +16,14 @@ struct MainTabView: View {
         TabView(selection: $selectedTab) {
             
             NavigationStack {
-                MySkyView()
-                // 🔥 이 두 줄을 추가해 주세요! 🔥
-                                    .ignoresSafeArea(edges: .top) // 우주 배경이 화면 끝까지 꽉 차게 올림
-                                    .toolbar(.hidden, for: .navigationBar) // 안 쓰는 빈 네비게이션 바 숨김
+                MySkyView(
+                    sessionStore: FocusSessionRuntimeStore(),
+                    dailySessionSheetBuilder: { hasSeenTutorial in
+                        AnyView(DailySessionView(hasSeenTutorial: hasSeenTutorial))
+                    }
+                )
+                .ignoresSafeArea(edges: .top)
+                .toolbar(.hidden, for: .navigationBar)
             }
             .tabItem {
                 Image(systemName: "sparkles")
@@ -43,7 +47,7 @@ struct MainTabView: View {
             }
             .tabItem {
                 Image(systemName: "person.2")
-                Text("Friends")
+                Text("Social")
             }
             .tag(Tab.friends)
 

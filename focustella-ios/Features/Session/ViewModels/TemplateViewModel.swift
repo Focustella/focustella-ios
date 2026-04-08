@@ -1,5 +1,5 @@
 // 📂 Features/Session/ViewModels/TemplateViewModel.swift
-import SwiftUI
+import Foundation
 import Combine
 
 @MainActor
@@ -40,7 +40,9 @@ final class TemplateViewModel: ObservableObject {
     }
     
     func deleteTemplate(at offsets: IndexSet) {
-        templates.remove(atOffsets: offsets)
+        for index in offsets.sorted(by: >) where templates.indices.contains(index) {
+            templates.remove(at: index)
+        }
         saveTemplates()
     }
 }

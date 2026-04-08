@@ -168,10 +168,6 @@ struct DevConstellationStudioView: View {
     }
 }
 
-extension Notification.Name {
-    static let didInsertUserConstellation = Notification.Name("didInsertUserConstellation")
-}
-
 #Preview {
     NavigationStack {
         DevConstellationStudioView()
