@@ -25,7 +25,11 @@ struct LegacyMySkyBackgroundView: View {
                 .blur(radius: 78)
                 .offset(x: 210, y: 300)
 
-            NightSkyStarField(seed: 20260301, count: 84)
+            NightSkyStarField(
+                count: 84,
+                salt: "background-legacy",
+                profile: .wideSoft
+            )
         }
         .allowsHitTesting(false)
     }

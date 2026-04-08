@@ -2,7 +2,7 @@ import SwiftUI
 
 final class ConstellationRepository {
     private static let sharedService = MockConstellationService()
-    private let placementHullPadding: CGFloat = 0.05
+    private let placementHullPadding: CGFloat = 0.15
     private let service: MockConstellationService
 
     init(service: MockConstellationService = ConstellationRepository.sharedService) {
@@ -11,8 +11,14 @@ final class ConstellationRepository {
 
     func fetchSessionConstellation(durationSeconds: Int, occupied: [Constellation], userId: String, randomSeed: Int64) async -> Constellation? {
         let payloads = await service.fetchConstellationCandidates(durationSeconds: durationSeconds, userId: userId)
+        let collisionCache = makePlacementCollisionCache(for: occupied)
         for payload in payloads {
-            if let constellation = placeWithRetries(payload: payload, occupied: occupied, randomSeed: randomSeed) {
+            if let constellation = placeWithRetries(
+                payload: payload,
+                occupied: occupied,
+                collisionCache: collisionCache,
+                randomSeed: randomSeed
+            ) {
                 return constellation
             }
         }
@@ -23,10 +29,17 @@ final class ConstellationRepository {
         let payloads = await service.fetchConstellationsForUser(userId: userId)
         var placed: [Constellation] = []
         var occupiedAll = occupied
+        var collisionCache = makePlacementCollisionCache(for: occupiedAll)
         for payload in payloads {
-            if let constellation = placeWithRetries(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
+            if let constellation = placeWithRetries(
+                payload: payload,
+                occupied: occupiedAll,
+                collisionCache: collisionCache,
+                randomSeed: randomSeed
+            ) {
                 placed.append(constellation)
                 occupiedAll.append(constellation)
+                appendToCollisionCache(constellation, cache: &collisionCache)
             }
         }
         return placed
@@ -36,12 +49,19 @@ final class ConstellationRepository {
         let payloads = await service.fetchCustomConstellationsForUser(userId: userId)
         var placed: [Constellation] = []
         var occupiedAll = occupied
+        var collisionCache = makePlacementCollisionCache(for: occupiedAll)
 
         for payload in payloads {
-            let constellation = placeWithRetries(payload: payload, occupied: occupiedAll, randomSeed: randomSeed)
+            let constellation = placeWithRetries(
+                payload: payload,
+                occupied: occupiedAll,
+                collisionCache: collisionCache,
+                randomSeed: randomSeed
+            )
             guard let constellation else { continue }
             placed.append(constellation)
             occupiedAll.append(constellation)
+            appendToCollisionCache(constellation, cache: &collisionCache)
         }
 
         return placed
@@ -51,10 +71,17 @@ final class ConstellationRepository {
         let payloads = await service.fetchBasePreviewConstellations(limit: limit)
         var placed: [Constellation] = []
         var occupiedAll = occupied
+        var collisionCache = makePlacementCollisionCache(for: occupiedAll)
         for payload in payloads {
-            if let constellation = placeWithRetries(payload: payload, occupied: occupiedAll, randomSeed: randomSeed) {
+            if let constellation = placeWithRetries(
+                payload: payload,
+                occupied: occupiedAll,
+                collisionCache: collisionCache,
+                randomSeed: randomSeed
+            ) {
                 placed.append(constellation)
                 occupiedAll.append(constellation)
+                appendToCollisionCache(constellation, cache: &collisionCache)
             }
         }
         return placed
@@ -64,7 +91,12 @@ final class ConstellationRepository {
         guard let payload = await service.fetchCustomConstellation(id: id, userId: userId) else {
             return nil
         }
-        return placeWithRetries(payload: payload, occupied: occupied, randomSeed: randomSeed)
+        return placeWithRetries(
+            payload: payload,
+            occupied: occupied,
+            collisionCache: makePlacementCollisionCache(for: occupied),
+            randomSeed: randomSeed
+        )
     }
 
     func placeRemoteConstellation(
@@ -74,7 +106,7 @@ final class ConstellationRepository {
         randomSeed: Int64
     ) -> Constellation? {
         let payload = ServerConstellationPayload(
-            id: "remote-\(placementKey)-\(template.id)",
+            id: "\(template.id)",
             name: template.name,
             visualStyle: .skyBlue,
             representativePoint: ServerPoint(x: 0, y: 0),
@@ -89,7 +121,36 @@ final class ConstellationRepository {
             serverId: template.id
         )
 
-        return placeWithRetries(payload: payload, occupied: occupied, randomSeed: randomSeed)
+        return placeRemotePayload(
+            payload: payload,
+            placementKey: placementKey,
+            occupied: occupied,
+            randomSeed: randomSeed
+        )
+    }
+
+    func placeRemotePayload(
+        payload: ServerConstellationPayload,
+        placementKey: String,
+        occupied: [Constellation],
+        randomSeed: Int64
+    ) -> Constellation? {
+        let namespacedPayload = ServerConstellationPayload(
+            id: "remote-\(placementKey)-\(payload.id)",
+            name: payload.name,
+            visualStyle: payload.visualStyle,
+            representativePoint: payload.representativePoint,
+            stars: payload.stars,
+            edges: payload.edges,
+            serverId: payload.serverId
+        )
+
+        return placeWithRetries(
+            payload: namespacedPayload,
+            occupied: occupied,
+            collisionCache: makePlacementCollisionCache(for: occupied),
+            randomSeed: randomSeed
+        )
     }
 
     func insertUserConstellation(
@@ -143,13 +204,24 @@ final class ConstellationRepository {
         return payload.id
     }
 
-    private func placeWithRetries(payload: ServerConstellationPayload, occupied: [Constellation], randomSeed: Int64) -> Constellation? {
+    private func placeWithRetries(
+        payload: ServerConstellationPayload,
+        occupied: [Constellation],
+        collisionCache: PlacementCollisionCache? = nil,
+        randomSeed: Int64
+    ) -> Constellation? {
         let baseSeed = pureSeed(randomSeed)
+        let cache = collisionCache ?? makePlacementCollisionCache(for: occupied)
 
         for pass in 0..<12 {
             let derivedSeed = mixedSeed(baseSeed, salt: "\(payload.id)|\(pass)")
             let bounds = placementBounds(for: occupied, pass: pass)
-            if let constellation = place(payload: payload, occupied: occupied, randomSeed: derivedSeed, bounds: bounds) {
+            if let constellation = place(
+                payload: payload,
+                collisionCache: cache,
+                randomSeed: derivedSeed,
+                bounds: bounds
+            ) {
                 return constellation
             }
         }
@@ -159,17 +231,10 @@ final class ConstellationRepository {
 
     private func place(
         payload: ServerConstellationPayload,
-        occupied: [Constellation],
+        collisionCache: PlacementCollisionCache,
         randomSeed: UInt64,
         bounds: PlacementBounds
     ) -> Constellation? {
-        let existingMeta = occupied.map { constellation in
-            let points = constellation.stars.map { CGPoint(x: $0.x, y: $0.y) }
-            return OccupiedConstellation(
-                hull: paddedHull(convexHull(points), padding: placementHullPadding)
-            )
-        }
-
         var rng = SeededGenerator(seed: pureSeed(randomSeed))
         let baseAngle = rng.nextCGFloat(in: 0...(CGFloat.pi * 2))
         let baseRadius = rng.nextCGFloat(in: 0.0...0.34)
@@ -194,7 +259,12 @@ final class ConstellationRepository {
             guard isInsideBounds(points, bounds: bounds) else { continue }
 
             let hull = paddedHull(convexHull(points), padding: placementHullPadding)
-            if existingMeta.contains(where: { hullsOverlap(hull, $0.hull) }) {
+            let hullBounds = polygonBounds(hull)
+            if overlapsAnyOccupiedHull(
+                candidateHull: hull,
+                candidateBounds: hullBounds,
+                collisionCache: collisionCache
+            ) {
                 continue
             }
 
@@ -257,6 +327,76 @@ final class ConstellationRepository {
         }
 
         return (stars, points, representative)
+    }
+
+    private func makePlacementCollisionCache(for occupied: [Constellation]) -> PlacementCollisionCache {
+        var items: [OccupiedConstellation] = []
+        items.reserveCapacity(occupied.count)
+
+        for constellation in occupied {
+            let points = constellation.stars.map { CGPoint(x: $0.x, y: $0.y) }
+            let hull = paddedHull(convexHull(points), padding: placementHullPadding)
+            guard hull.count >= 3 else { continue }
+            items.append(
+                OccupiedConstellation(
+                    hull: hull,
+                    bounds: polygonBounds(hull)
+                )
+            )
+        }
+
+        let aggregateHull = convexHull(items.flatMap(\.hull))
+        let aggregateBounds = polygonBounds(aggregateHull)
+        return PlacementCollisionCache(
+            occupied: items,
+            aggregateHull: aggregateHull,
+            aggregateBounds: aggregateBounds
+        )
+    }
+
+    private func appendToCollisionCache(_ constellation: Constellation, cache: inout PlacementCollisionCache) {
+        let points = constellation.stars.map { CGPoint(x: $0.x, y: $0.y) }
+        let hull = paddedHull(convexHull(points), padding: placementHullPadding)
+        guard hull.count >= 3 else { return }
+
+        cache.occupied.append(
+            OccupiedConstellation(
+                hull: hull,
+                bounds: polygonBounds(hull)
+            )
+        )
+
+        // Incremental update: no full occupied rebuild, only merge previous aggregate hull with new hull.
+        cache.aggregateHull = convexHull(cache.aggregateHull + hull)
+        cache.aggregateBounds = polygonBounds(cache.aggregateHull)
+    }
+
+    private func overlapsAnyOccupiedHull(
+        candidateHull: [CGPoint],
+        candidateBounds: CGRect,
+        collisionCache: PlacementCollisionCache
+    ) -> Bool {
+        guard candidateHull.count >= 3 else { return false }
+        guard !collisionCache.occupied.isEmpty else { return false }
+
+        // Broad-phase: if it does not touch the global aggregate hull bounds, it cannot overlap any occupied hull.
+        if !collisionCache.aggregateBounds.isNull,
+           !collisionCache.aggregateBounds.intersects(candidateBounds) {
+            return false
+        }
+
+        // Broad-phase 2: intersect against global aggregate hull first.
+        if collisionCache.aggregateHull.count >= 3,
+           !hullsOverlap(candidateHull, collisionCache.aggregateHull) {
+            return false
+        }
+
+        // Narrow-phase: precise pair checks only when broad-phase says "possible".
+        return collisionCache.occupied.contains { occupied in
+            guard occupied.hull.count >= 3 else { return false }
+            guard occupied.bounds.intersects(candidateBounds) else { return false }
+            return hullsOverlap(candidateHull, occupied.hull)
+        }
     }
 
     private func deterministicUUIDString(input: String) -> String {
@@ -356,6 +496,28 @@ final class ConstellationRepository {
         }
     }
 
+    private func polygonBounds(_ points: [CGPoint]) -> CGRect {
+        guard let first = points.first else { return .null }
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+
+        for point in points.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: max(0.0001, maxX - minX),
+            height: max(0.0001, maxY - minY)
+        )
+    }
+
     private func hullsOverlap(_ a: [CGPoint], _ b: [CGPoint]) -> Bool {
         guard a.count >= 3, b.count >= 3 else { return false }
 
@@ -429,6 +591,13 @@ final class ConstellationRepository {
 
 private struct OccupiedConstellation {
     let hull: [CGPoint]
+    let bounds: CGRect
+}
+
+private struct PlacementCollisionCache {
+    var occupied: [OccupiedConstellation]
+    var aggregateHull: [CGPoint]
+    var aggregateBounds: CGRect
 }
 
 private struct PlacementBounds {

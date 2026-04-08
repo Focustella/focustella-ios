@@ -6,8 +6,7 @@ final class MySkySessionDirector {
     private let logger = Logger(subsystem: "focustella-ios", category: "FocusSession")
 
     struct Context {
-        let sessionStore: SessionStore
-        let scheduler: DiscoveryScheduler
+        let sessionStore: FocusSessionRuntimeStoring
 
         var skyState: Binding<MySkySceneState>
         var livePresentationState: Binding<FocusSessionPresentationState>
@@ -65,8 +64,15 @@ final class MySkySessionDirector {
             now: startedAt
         )
 
+        let liveSessionStartPayload: [String: Any] = [
+            "event": "live-session-start",
+            "constellationId": constellation.id.uuidString,
+            "stars": constellation.starCount,
+            "slotSeconds": slotSeconds,
+            "representativePoint": LogJSONFormatter.point(constellation.representativePoint)
+        ]
         logger.notice(
-            "live-session-start constellation=\(constellation.id.uuidString, privacy: .public) stars=\(constellation.starCount) slotSeconds=\(slotSeconds) rep=(\(constellation.representativePoint.x, format: .fixed(precision: 3)),\(constellation.representativePoint.y, format: .fixed(precision: 3)))"
+            "\(LogJSONFormatter.pretty(liveSessionStartPayload), privacy: .public)"
         )
 
         beginLivePresentation(
@@ -244,8 +250,7 @@ final class MySkySessionDirector {
 
         let result = context.sessionStore.refreshCurrentSession(
             now: now,
-            totalStars: constellation.starCount,
-            scheduler: context.scheduler
+            totalStars: constellation.starCount
         )
 
         let actualDiscoveredCount = result.completed?.discoveredStarCount
@@ -265,9 +270,14 @@ final class MySkySessionDirector {
             renderedCount = context.skyState.wrappedValue.visibleDiscoveredStarCounts[constellation.id] ?? 0
         }
 
-        logger.debug(
-            "session-tick constellation=\(constellation.id.uuidString, privacy: .public) actual=\(actualDiscoveredCount) rendered=\(renderedCount) total=\(constellation.starCount)"
-        )
+        let tickPayload: [String: Any] = [
+            "event": "session-tick",
+            "constellationId": constellation.id.uuidString,
+            "actualDiscoveredCount": actualDiscoveredCount,
+            "renderedDiscoveredCount": renderedCount,
+            "totalStars": constellation.starCount
+        ]
+        logger.debug("\(LogJSONFormatter.compact(tickPayload), privacy: .public)")
 
         if let completed = result.completed {
             handleSessionCompleted(completed, context: context)

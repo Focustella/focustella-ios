@@ -5,12 +5,15 @@ import os
 
 struct MySkyView: View {
     private static let logger = Logger(subsystem: "focustella-ios", category: "FocusSession")
+    private let dailySessionSheetBuilder: (Bool) -> AnyView
 
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = MySkyViewModel()
-    @StateObject private var sessionStore = SessionStore()
+    @StateObject private var sessionStore: FocusSessionRuntimeStore
     @StateObject private var accessibility = AppAccessibility.shared
     @StateObject private var devInsertionCoordinator = DevInsertionCoordinator()
+    @StateObject private var inputProtectionCoordinator = MySkyInputProtectionCoordinator()
+    @StateObject private var dailyRewardStore = MySkyDailyRewardStore()
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("starStyle") private var starStyle: StarAppearanceStyle = .realistic
@@ -21,15 +24,11 @@ struct MySkyView: View {
     // 🔥 튜토리얼 진행 상태 저장
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
     @State private var tutorialStep: TutorialStep = .notStarted
-    
-    @AppStorage("dailyStarsData") private var dailyStarsData: String = ""
-    @State private var dailyStars: [DailyStarItem] = []
-    @State private var selectedDailyStar: DailyStarItem? // 터치된 별을 기억할 변수
+
     @State private var showDailyRewardText = false
     @State private var dailyStarRippleCenter: CGPoint?
 
     private let repository = ConstellationRepository()
-    private let scheduler = DiscoveryScheduler()
     private let sessionDirector = MySkySessionDirector()
     private let interactionController = MySkyInteractionController()
 
@@ -75,7 +74,10 @@ struct MySkyView: View {
     private let fallbackLocalUserId = "local-user"
 
     private var isSkyInteractionLocked: Bool {
-        pendingMemoSessionId != nil || showMemoSheet || tutorialStep != .done
+        pendingMemoSessionId != nil ||
+        showMemoSheet ||
+        tutorialStep != .done ||
+        inputProtectionCoordinator.isActive
     }
 
     private var stateMerger: MySkyStateMerger {
@@ -83,6 +85,14 @@ struct MySkyView: View {
             placedConstellations: skyState.constellations,
             completedSessions: sessionStore.completedSessions
         )
+    }
+
+    init(
+        sessionStore: @autoclosure @escaping () -> FocusSessionRuntimeStore,
+        dailySessionSheetBuilder: @escaping (Bool) -> AnyView = { _ in AnyView(EmptyView()) }
+    ) {
+        _sessionStore = StateObject(wrappedValue: sessionStore())
+        self.dailySessionSheetBuilder = dailySessionSheetBuilder
     }
 
     var body: some View {
@@ -111,8 +121,6 @@ struct MySkyView: View {
                             onPause: { sessionStore.pause() },
                             onResume: {
                                 let remainingStars = max(0, constellation.starCount - session.discoveredStarCount)
-                                let remainingTime = TimeInterval(sessionStore.remainingSeconds())
-                                _ = scheduler.intervalAfterResume(remainingTime: remainingTime, remainingStars: remainingStars)
                                 sessionStore.resume(remainingStars: remainingStars)
                             },
                             onCancel: {
@@ -202,6 +210,7 @@ struct MySkyView: View {
                     DevInsertionToolView(
                         starStyle: $starStyle,
                         coordinator: devInsertionCoordinator,
+                        fixedUserSeed: Int64(userSeed),
                         isSessionRunning: sessionStore.currentSession != nil,
                         onPlaceNextBatch: {
                             devInsertionCoordinator.placeNextBatch(context: devInsertionContext)
@@ -214,11 +223,20 @@ struct MySkyView: View {
                     .padding(.trailing, 20)
                 }
             }
+            .overlay(alignment: .top) {
+                if inputProtectionCoordinator.isBannerVisible {
+                    InputProtectionBannerView()
+                    .padding(.top, proxy.safeAreaInsets.top + 64)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             .onDisappear {
                 rewardSequenceTask?.cancel()
                 dailyRewardTextTask?.cancel()
                 dailyStarRippleCenter = nil
                 showDailyRewardText = false
+                dailyRewardStore.clearSelection()
+                inputProtectionCoordinator.reset()
                 devInsertionCoordinator.reset(context: devInsertionContext)
             }
             .toolbar {
@@ -228,6 +246,7 @@ struct MySkyView: View {
             }
             .onAppear {
                 canvasSize = size
+                dailyRewardStore.loadFromStorage()
                 guard !hasInitializedView else { return }
 
                 hasInitializedView = true
@@ -242,7 +261,6 @@ struct MySkyView: View {
 
                 showCTA = sessionStore.currentSession == nil
                 hasLaidOutCTA = true
-                parseDailyStars()
 
                 // Keep the first sky fetch on initial mount only so tab switches do not
                 // recreate the whole sky state and trigger another expensive re-render.
@@ -260,6 +278,7 @@ struct MySkyView: View {
             .onReceive(tick) { now in syncSession(now: now) }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
+                    dailyRewardStore.loadFromStorage()
                     syncSession(now: Date())
                     scheduleCTA()
                     Task { await devInsertionCoordinator.syncLocalInsertedConstellations(context: devInsertionContext) }
@@ -276,7 +295,7 @@ struct MySkyView: View {
                     )
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DailySessionCompleted"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .dailySessionCompleted)) { _ in
                 if !hasSeenTutorial && tutorialStep == .waitDaily {
                     // 튜토리얼 중 일일 세션을 완료했다면!
                     tutorialStep = .spawningReward
@@ -286,11 +305,9 @@ struct MySkyView: View {
                     triggerDailyRewardSequence(size: canvasSize)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowFocusSession"))) { _ in showSlotPicker = true }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowDailySession"))) { _ in showDailySessionSheet = true }
             .sheet(isPresented: $showSlotPicker) { SlotPickerSheet { seconds in requestStartSession(slotSeconds: seconds) } }
             .sheet(isPresented: $showDailySessionSheet) {
-                DailySessionView()
+                dailySessionSheetBuilder(hasSeenTutorial)
             }
             // 🔥 튜토리얼 강제 종료(탈옥) 방지 로직 추가!
             .onChange(of: showDailySessionSheet) { _, isShowing in
@@ -369,32 +386,10 @@ struct MySkyView: View {
         }
     }
 
-    // 🔥 2. 로컬 캐시 파싱 로직 업데이트 (x, y, timestamp 형태로 저장/불러오기)
-        private func parseDailyStars() {
-            let pairs = dailyStarsData.split(separator: "|")
-            dailyStars = pairs.compactMap { pair in
-                let components = pair.split(separator: ",")
-                guard components.count == 3,
-                      let x = Double(components[0]),
-                      let y = Double(components[1]),
-                      let timestamp = TimeInterval(components[2]) else { return nil }
-                return DailyStarItem(position: CGPoint(x: x, y: y), date: Date(timeIntervalSince1970: timestamp))
-            }
-        }
-    
-    private func saveDailyStar(_ point: CGPoint) {
-            let newItem = DailyStarItem(position: point, date: Date())
-            dailyStars.append(newItem)
-            
-            // "x,y,시간|x,y,시간" 형태로 저장
-            let pairs = dailyStars.map { "\($0.position.x),\($0.position.y),\($0.date.timeIntervalSince1970)" }
-            dailyStarsData = pairs.joined(separator: "|")
-        }
-
     private func makeRewardPoint(xRange: ClosedRange<CGFloat>, yRange: ClosedRange<CGFloat>) -> CGPoint {
         MySkyRewardPlanner(
             constellations: skyState.constellations,
-            dailyStars: dailyStars
+            dailyStars: dailyRewardStore.stars
         ).makeRewardPoint(xRange: xRange, yRange: yRange)
     }
 
@@ -415,7 +410,8 @@ struct MySkyView: View {
 
             spawnEffectToken += 1
             dailyStarRippleCenter = point
-            saveDailyStar(point)
+            dailyRewardStore.append(point)
+            dailyRewardStore.clearSelection()
 
             let generator = UIImpactFeedbackGenerator(style: .medium)
             generator.impactOccurred()
@@ -517,7 +513,6 @@ struct MySkyView: View {
     private var sessionDirectorContext: MySkySessionDirector.Context {
         MySkySessionDirector.Context(
             sessionStore: sessionStore,
-            scheduler: scheduler,
             skyState: $skyState,
             livePresentationState: $livePresentationState,
             activeStarBirthEffect: $activeStarBirthEffect,
@@ -657,6 +652,8 @@ struct MySkyView: View {
     
     private func registerInteraction() {
         if showCTA { withAnimation(.easeInOut(duration: ctaFadeDuration)) { showCTA = false } }
+        // User pan/zoom should immediately take over camera control.
+        cameraTransitionTask?.cancel()
         isInteracting = true
         ctaTask?.cancel()
     }
@@ -664,6 +661,26 @@ struct MySkyView: View {
     private func endInteraction() {
         isInteracting = false
         scheduleCTA()
+    }
+
+    private func handleInputPressureDetected() {
+        let duration: TimeInterval = 3.0
+        let didActivate = inputProtectionCoordinator.activate(duration: duration) {
+            // Cancel ongoing gesture states and return to initial sky camera while input is locked.
+            dragStartCamera = nil
+            magnifyStartZoom = nil
+            isInteracting = false
+            animateCamera(to: .default, duration: 0.42)
+        }
+
+        guard didActivate else { return }
+        Haptics.warning()
+        let payload: [String: Any] = [
+            "event": "input-protection-activated",
+            "activationCount": inputProtectionCoordinator.activationCount,
+            "durationSeconds": duration
+        ]
+        Self.logger.notice("\(LogJSONFormatter.compact(payload), privacy: .public)")
     }
 
     private func scheduleCTA() {
@@ -682,7 +699,11 @@ struct MySkyView: View {
             dragStartCamera: $dragStartCamera,
             magnifyStartZoom: $magnifyStartZoom,
             selectedSession: $selectedSession,
-            selectedDailyStar: $selectedDailyStar,
+            dailyStars: dailyRewardStore.stars,
+            selectedDailyStar: dailyRewardStore.selectedStar,
+            onSelectDailyStar: { item in
+                dailyRewardStore.select(item)
+            },
             completionConstellationId: completionConstellation?.id,
             liveConstellationId: livePresentationState.constellationId,
             completedSessions: sessionStore.completedSessions,
@@ -697,7 +718,8 @@ struct MySkyView: View {
                 constellationById(id)
             },
             onInteractionBegan: registerInteraction,
-            onInteractionEnded: endInteraction
+            onInteractionEnded: endInteraction,
+            onInputPressureDetected: handleInputPressureDetected
         )
     }
 
@@ -715,7 +737,7 @@ struct MySkyView: View {
 
     @ViewBuilder
     private func interactiveSkyLayer(size: CGSize) -> some View {
-        let shouldUseSharedTimeline = (highPerformanceMode && !accessibility.isReduceMotionEnabled) || activeStarBirthEffect != nil
+        let shouldUseSharedTimeline = !isInteracting && (((highPerformanceMode && !accessibility.isReduceMotionEnabled) || activeStarBirthEffect != nil))
         let renderedSky = Group {
             if shouldUseSharedTimeline {
                 TimelineView(.periodic(from: .now, by: 1.0 / 8.0)) { context in
@@ -817,8 +839,19 @@ struct MySkyView: View {
         guard developerMode else { return }
         let mapper = coordinateMapper(for: size)
         let canvasTarget = mapper.canvasPoint(fromSky: targetSky)
+        let roundedZoom = (Double(targetCamera.zoom) * 1_000).rounded() / 1_000
+        let payload: [String: Any] = [
+            "event": "camera-target",
+            "reason": reason,
+            "skyTarget": LogJSONFormatter.point(targetSky),
+            "canvasTarget": LogJSONFormatter.point(canvasTarget),
+            "currentCameraCenterSky": LogJSONFormatter.point(cameraState.centerSky),
+            "cameraCenterSky": LogJSONFormatter.point(targetCamera.centerSky),
+            "screenCenter": LogJSONFormatter.point(mapper.screenCenter, precision: 1),
+            "zoom": roundedZoom
+        ]
         Self.logger.notice(
-            "camera reason=\(reason, privacy: .public) skyTarget=(\(targetSky.x, format: .fixed(precision: 3)),\(targetSky.y, format: .fixed(precision: 3))) canvasTarget=(\(canvasTarget.x, format: .fixed(precision: 3)),\(canvasTarget.y, format: .fixed(precision: 3))) currentCameraCenterSky=(\(cameraState.centerSky.x, format: .fixed(precision: 3)),\(cameraState.centerSky.y, format: .fixed(precision: 3))) cameraCenterSky=(\(targetCamera.centerSky.x, format: .fixed(precision: 3)),\(targetCamera.centerSky.y, format: .fixed(precision: 3))) screenCenter=(\(mapper.screenCenter.x, format: .fixed(precision: 1)),\(mapper.screenCenter.y, format: .fixed(precision: 1))) zoom=\(targetCamera.zoom, format: .fixed(precision: 3))"
+            "\(LogJSONFormatter.pretty(payload), privacy: .public)"
         )
     }
 
@@ -856,8 +889,15 @@ struct MySkyView: View {
         let presentation = focusSessionPresentation(for: constellation)
         guard let star = presentation.birthStar(for: discoveredCount) else { return 0 }
         if developerMode {
+            let payload: [String: Any] = [
+                "event": "star-birth",
+                "constellationId": constellation.id.uuidString,
+                "discoveredCount": discoveredCount,
+                "starId": star.id.uuidString,
+                "skyTarget": LogJSONFormatter.point(CGPoint(x: star.x, y: star.y))
+            ]
             Self.logger.notice(
-                "birth constellation=\(constellation.id.uuidString, privacy: .public) discovered=\(discoveredCount) star=\(star.id.uuidString, privacy: .public) skyTarget=(\(star.x, format: .fixed(precision: 3)),\(star.y, format: .fixed(precision: 3)))"
+                "\(LogJSONFormatter.pretty(payload), privacy: .public)"
             )
         }
         spawnEffectToken += 1
@@ -966,7 +1006,7 @@ struct MySkyView: View {
 
             ZStack(alignment: .topLeading) {
                 settledConstellationLayer(mapper: mapper, animationTime: animationTime)
-                dailyRewardLayer(mapper: mapper)
+                dailyRewardLayer(mapper: mapper, animationTime: animationTime)
                 liveSessionLayer(mapper: mapper, animationTime: animationTime)
             }
             .frame(width: size.width, height: size.height)
@@ -1002,47 +1042,42 @@ struct MySkyView: View {
                 starStyle: starStyle,
                 reduceMotion: accessibility.isReduceMotionEnabled,
                 highPerformanceMode: highPerformanceMode,
+                isInteracting: isInteracting,
                 animationTime: animationTime
             )
         }
     }
 
     @ViewBuilder
-    private func dailyRewardLayer(mapper: MySkyCoordinateMapper) -> some View {
-        ForEach(dailyStars) { item in
-            let screenPoint = mapper.screenPoint(fromSky: item.position, camera: cameraState)
+    private func dailyRewardLayer(mapper: MySkyCoordinateMapper, animationTime: TimeInterval?) -> some View {
+        if !dailyRewardStore.stars.isEmpty {
+            DailyRewardsCanvas(
+                stars: dailyRewardStore.stars,
+                coordinateMapper: mapper,
+                camera: cameraState,
+                reduceMotion: accessibility.isReduceMotionEnabled,
+                isInteracting: isInteracting,
+                animationTime: animationTime
+            )
+        }
 
-            DailyRewardStarNode()
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
-                .onTapGesture {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                        if selectedDailyStar?.id == item.id {
-                            selectedDailyStar = nil
-                        } else {
-                            selectedDailyStar = item
-                        }
-                    }
-                }
-                .position(screenPoint)
-
-            if selectedDailyStar?.id == item.id {
-                VStack(spacing: 4) {
-                    Text("✨ 일일 세션 완료")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.yellow)
-                    Text(item.date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption.bold())
-                        .foregroundStyle(.white)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
-                .position(x: screenPoint.x, y: screenPoint.y - 50)
-                .zIndex(100)
-                .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
+        if let selectedDailyStar = dailyRewardStore.selectedStar {
+            let screenPoint = mapper.screenPoint(fromSky: selectedDailyStar.position, camera: cameraState)
+            VStack(spacing: 4) {
+                Text("✨ 일일 세션 완료")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.yellow)
+                Text(selectedDailyStar.date.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
+            .position(x: screenPoint.x, y: screenPoint.y - 50)
+            .zIndex(100)
+            .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
         }
     }
 
@@ -1111,10 +1146,8 @@ struct MySkyView: View {
                 let sky = try await viewModel.fetchMySky(userSeed: Int64(userSeed))
                 userSeed = Int(sky.seed)
                 
-                // 🚨🚨🚨 [핵심 수정] 🚨🚨🚨
-                // 기존에 있던 fetchedStars 관련 코드를 완전히 삭제합니다!
-                // 서버의 임시 데이터가 우리가 기기에 예쁘게 저장해둔 별 위치와 시간을 덮어쓰지 못하게 막습니다.
-                // 이제 onAppear에서 부른 parseDailyStars()의 데이터가 절대적으로 유지됩니다.
+                // Keep local daily reward stars authoritative.
+                // Remote fetched stars should not overwrite locally persisted reward positions.
 
                 let mergedSky = stateMerger.mergeRemoteSkyWithLocalState(sky)
                 skyState.replace(snapshot: mergedSky)

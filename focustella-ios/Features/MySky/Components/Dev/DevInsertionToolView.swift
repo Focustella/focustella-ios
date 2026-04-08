@@ -3,6 +3,7 @@ import SwiftUI
 struct DevInsertionToolView: View {
     @Binding var starStyle: StarAppearanceStyle
     @ObservedObject var coordinator: DevInsertionCoordinator
+    let fixedUserSeed: Int64
 
     let isSessionRunning: Bool
     let onPlaceNextBatch: () -> Void
@@ -73,21 +74,27 @@ struct DevInsertionToolView: View {
                     Text("Seed")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    TextField("seed", text: $coordinator.seedText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 76)
+                    Text("\(fixedUserSeed)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Template")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Picker("Template", selection: $coordinator.templateKind) {
-                        ForEach(ConstellationPlacementFixture.TemplateKind.allCases) { kind in
-                            Text(kind.title).tag(kind)
-                        }
-                    }
-                    .pickerStyle(.menu)
+                    Text("Mixed (고정)")
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -102,7 +109,20 @@ struct DevInsertionToolView: View {
                     Button(coordinator.batchCount == 1 ? "다음 배치" : "\(coordinator.batchCount)개 배치") {
                         onPlaceNextBatch()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        Capsule()
+                            .fill(isSessionRunning ? Color.white.opacity(0.28) : Color.white.opacity(0.96))
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.black.opacity(0.2), lineWidth: 1)
+                    )
+                    .opacity(isSessionRunning ? 0.7 : 1.0)
                     .disabled(isSessionRunning)
 
                     Button("리셋") {

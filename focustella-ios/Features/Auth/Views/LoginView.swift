@@ -213,18 +213,34 @@ struct LoginView: View {
 // MARK: - 밀도 높은 우주 배경 컴포넌트
 private struct DenseStarFieldView: View {
     let isAnimating: Bool
-    
-    private let stars: [CGPoint] = (0..<150).map { _ in
-        CGPoint(x: CGFloat.random(in: 0...1), y: CGFloat.random(in: 0...1))
-    }
-    
-    private let lines: [(CGPoint, CGPoint)] = (0..<30).map { _ in
-        let start = CGPoint(x: CGFloat.random(in: 0...1), y: CGFloat.random(in: 0...1))
-        let end = CGPoint(
-            x: start.x + CGFloat.random(in: -0.15...0.15),
-            y: start.y + CGFloat.random(in: -0.15...0.15)
+
+    private var stars: [NightSkyStarSpec] {
+        NightSkyStarFactory.makeStars(
+            count: 150,
+            salt: "login-dense-stars",
+            profile: .wideSoft
         )
-        return (start, end)
+    }
+
+    private var lines: [(CGPoint, CGPoint)] {
+        var segments: [(CGPoint, CGPoint)] = []
+        segments.reserveCapacity(30)
+
+        for index in stride(from: 0, to: stars.count - 2, by: 5) {
+            guard segments.count < 30 else { break }
+            let startStar = stars[index]
+            let offsetStar = stars[index + 1]
+            let dx = (offsetStar.x - 0.5) * 0.26
+            let dy = (offsetStar.y - 0.5) * 0.26
+            let start = CGPoint(x: startStar.x, y: startStar.y)
+            let end = CGPoint(
+                x: (start.x + dx).clamped(to: 0...1),
+                y: (start.y + dy).clamped(to: 0...1)
+            )
+            segments.append((start, end))
+        }
+
+        return segments
     }
     
     var body: some View {
@@ -242,22 +258,28 @@ private struct DenseStarFieldView: View {
                 
                 ForEach(0..<stars.count, id: \.self) { index in
                     let star = stars[index]
-                    let starSize = CGFloat.random(in: 1...3.5)
                     let isTwinkling = index % 3 == 0
+                    let twinkleDuration = 1.4 + Double(index % 9) * 0.2
                     
                     Circle()
                         .fill(Color.white)
-                        .frame(width: starSize, height: starSize)
+                        .frame(width: star.size, height: star.size)
                         .position(x: star.x * size.width, y: star.y * size.height)
-                        .opacity(isTwinkling ? (isAnimating ? 1.0 : 0.2) : CGFloat.random(in: 0.3...0.8))
-                        .blur(radius: starSize > 2.5 ? 1 : 0)
+                        .opacity(isTwinkling ? (isAnimating ? 1.0 : 0.2) : star.opacity)
+                        .blur(radius: star.size > 2.5 ? 1 : 0)
                         .animation(
-                            isTwinkling ? .easeInOut(duration: Double.random(in: 1.5...3.0)).repeatForever(autoreverses: true) : .default,
+                            isTwinkling ? .easeInOut(duration: twinkleDuration).repeatForever(autoreverses: true) : .default,
                             value: isAnimating
                         )
                 }
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+private extension CGFloat {
+    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
     }
 }

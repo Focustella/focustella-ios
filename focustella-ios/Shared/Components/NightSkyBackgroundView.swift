@@ -23,6 +23,10 @@ struct NightSkyBackgroundView: View {
             FocusStarSkyBackgroundView()
         case .mySkyLegacy:
             LegacyMySkyBackgroundView()
+        case .mySkyAurora:
+            AuroraMySkyBackgroundView()
+        case .mySkyDeepSpace:
+            DeepSpaceMySkyBackgroundView()
         }
     }
 }
@@ -31,37 +35,59 @@ enum NightSkyBackgroundStyle {
     case demo
     case mySkyFocusStar
     case mySkyLegacy
+    case mySkyAurora
+    case mySkyDeepSpace
 }
 
 struct NightSkyStarField: View {
-    let seed: UInt64
+    var seed: UInt64? = nil
     let count: Int
+    var salt: String = "night-sky-field"
+    var profile: NightSkyStarProfile = .standard
 
-    private var stars: [NightSkyStar] {
-        var generator = NightSkyBackgroundRNG(state: seed == 0 ? 0xCAFEBABE : seed)
-        return (0..<count).map { _ in
-            NightSkyStar(
-                x: generator.nextCGFloat(in: 0.02...0.98),
-                y: generator.nextCGFloat(in: 0.03...0.97),
-                size: generator.nextCGFloat(in: 1.2...3.2),
-                opacity: generator.nextDouble(in: 0.16...0.52),
-                glowRadius: generator.nextCGFloat(in: 1.0...3.0)
-            )
-        }
+    private var stars: [NightSkyStarSpec] {
+        NightSkyStarFactory.makeStars(
+            count: count,
+            seed: seed,
+            salt: salt,
+            profile: profile
+        )
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                ForEach(Array(stars.enumerated()), id: \.offset) { _, star in
-                    Circle()
-                        .fill(Color.white.opacity(star.opacity))
-                        .frame(width: star.size, height: star.size)
-                        .shadow(color: Color.white.opacity(star.opacity * 0.55), radius: star.glowRadius)
-                        .position(x: star.x * proxy.size.width, y: star.y * proxy.size.height)
+        GeometryReader { _ in
+            // Draw stars in a single canvas pass to avoid one SwiftUI view per star.
+            Canvas(opaque: false, colorMode: .linear, rendersAsynchronously: true) { context, size in
+                for star in stars {
+                    let center = CGPoint(x: star.x * size.width, y: star.y * size.height)
+                    let coreDiameter = max(0.8, star.size)
+                    let glowDiameter = coreDiameter + star.glowRadius * 2.2
+
+                    let glowRect = CGRect(
+                        x: center.x - glowDiameter / 2,
+                        y: center.y - glowDiameter / 2,
+                        width: glowDiameter,
+                        height: glowDiameter
+                    )
+                    context.fill(
+                        Path(ellipseIn: glowRect),
+                        with: .color(Color.white.opacity(star.opacity * 0.28))
+                    )
+
+                    let coreRect = CGRect(
+                        x: center.x - coreDiameter / 2,
+                        y: center.y - coreDiameter / 2,
+                        width: coreDiameter,
+                        height: coreDiameter
+                    )
+                    context.fill(
+                        Path(ellipseIn: coreRect),
+                        with: .color(Color.white.opacity(star.opacity))
+                    )
                 }
             }
         }
+        .allowsHitTesting(false)
     }
 }
 
@@ -86,34 +112,8 @@ private struct DemoNightSkyBackgroundView: View {
                 .blur(radius: 70)
                 .offset(x: 130, y: 260)
 
-            NightSkyStarField(seed: 20260321, count: 72)
+            NightSkyStarField(count: 72, salt: "background-demo")
+                .accessibilityHidden(true)
         }
-    }
-}
-
-private struct NightSkyStar {
-    let x: CGFloat
-    let y: CGFloat
-    let size: CGFloat
-    let opacity: Double
-    let glowRadius: CGFloat
-}
-
-private struct NightSkyBackgroundRNG {
-    var state: UInt64
-
-    mutating func next() -> UInt64 {
-        state = 6364136223846793005 &* state &+ 1442695040888963407
-        return state
-    }
-
-    mutating func nextDouble(in range: ClosedRange<Double>) -> Double {
-        let ratio = Double(next() & 0xFFFF_FFFF) / Double(UInt32.max)
-        return range.lowerBound + ratio * (range.upperBound - range.lowerBound)
-    }
-
-    mutating func nextCGFloat(in range: ClosedRange<CGFloat>) -> CGFloat {
-        let ratio = Double(next() & 0xFFFF_FFFF) / Double(UInt32.max)
-        return range.lowerBound + CGFloat(ratio) * (range.upperBound - range.lowerBound)
     }
 }

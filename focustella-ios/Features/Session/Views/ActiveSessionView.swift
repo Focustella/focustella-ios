@@ -3,8 +3,8 @@ import SwiftUI
 
 struct ActiveSessionView: View {
     @ObservedObject var viewModel: ActiveSessionViewModel
+    let hasSeenTutorial: Bool
     @State private var newItemTitle: String = ""
-    @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

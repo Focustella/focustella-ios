@@ -19,16 +19,14 @@ final class DevInsertionCoordinator: ObservableObject {
         var skyState: Binding<MySkySceneState>
         var edgeRevealTokens: Binding<[UUID: Int]>
         var selectedSession: Binding<FocusSession?>
-        let sessionStore: SessionStore
+        let sessionStore: FocusSessionRuntimeStoring
         let repository: ConstellationRepository
         let localUserId: String
         let userSeed: Int64
     }
 
-    @Published var seedText: String = "777"
     @Published var isCollapsed: Bool = true
     @Published var batchCount: Int = 1
-    @Published var templateKind: ConstellationPlacementFixture.TemplateKind = .compactPentagon
     @Published private(set) var step: Int = 0
     @Published private(set) var lastResult: PlacementProbeResult?
 
@@ -120,12 +118,24 @@ final class DevInsertionCoordinator: ObservableObject {
 
     private func placeNextProbeConstellation(context: Context) {
         let placementKey = "probe-\(step)"
-        let template = ConstellationPlacementFixture.template(templateKind, id: 100 + step)
-        let constellation = context.repository.placeRemoteConstellation(
-            template: template,
+        guard let payload = ConstellationMockPayloadCatalog.mixedPayload(step: step, userSeed: context.userSeed) else {
+            step += 1
+            lastResult = PlacementProbeResult(
+                step: step,
+                constellationId: nil,
+                placementKey: placementKey,
+                overlapDetected: false,
+                representativePoint: nil,
+                message: "payload=nil"
+            )
+            return
+        }
+
+        let constellation = context.repository.placeRemotePayload(
+            payload: payload,
             placementKey: placementKey,
             occupied: context.skyState.wrappedValue.constellations,
-            randomSeed: Int64(seedText) ?? 777
+            randomSeed: context.userSeed
         )
         step += 1
 
@@ -153,7 +163,7 @@ final class DevInsertionCoordinator: ObservableObject {
             placementKey: placementKey,
             overlapDetected: overlapDetected,
             representativePoint: constellation.representativePoint,
-            message: "placed=\(constellation.name)"
+            message: "placed=\(payload.name)"
         )
     }
 

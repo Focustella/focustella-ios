@@ -2,17 +2,17 @@ import Foundation
 import Combine
 
 @MainActor
-final class SessionStore: ObservableObject {
+final class FocusSessionRuntimeStore: ObservableObject, FocusSessionRuntimeStoring {
     @Published private(set) var completedSessions: [FocusSession] = []
     @Published private(set) var currentSession: FocusSession?
 
-    // 1. 🔥 날아갔던 elapsedOffset 복구
     private struct RuntimeState {
         var pausedAccumulated: TimeInterval
         var pausedAt: Date?
         var elapsedOffset: TimeInterval
     }
 
+    private let progressCalculator = FocusSessionProgressCalculator()
     private var runtimeState: RuntimeState?
 
     func startSession(
@@ -26,10 +26,11 @@ final class SessionStore: ObservableObject {
             startedAt: now,
             slotSeconds: slotSeconds,
             constellationId: constellationId,
-            discoveredStarCount: 0, // 🔥 1에서 0으로 수정 (시작할 때 별은 0개부터)
+            discoveredStarCount: 0,
             status: .running,
             memo: nil
         )
+
         if let currentSession {
             self.currentSession = FocusSession(
                 id: currentSession.id,
@@ -44,7 +45,7 @@ final class SessionStore: ObservableObject {
                 memo: currentSession.memo
             )
         }
-        // 🔥 초기화에 elapsedOffset 추가
+
         runtimeState = RuntimeState(pausedAccumulated: 0, pausedAt: nil, elapsedOffset: 0)
     }
 
@@ -80,18 +81,18 @@ final class SessionStore: ObservableObject {
         runtimeState = nil
     }
 
-    func refreshCurrentSession(now: Date, totalStars: Int, scheduler: DiscoveryScheduler) -> (newlyDiscovered: Bool, completed: FocusSession?) {
+    func refreshCurrentSession(now: Date, totalStars: Int) -> (newlyDiscovered: Bool, completed: FocusSession?) {
         guard var session = currentSession else { return (false, nil) }
         guard let runtimeState else { return (false, nil) }
 
         let previousCount = session.discoveredStarCount
-        
-        let syncedCount = scheduler.syncDiscoveredStarCount(
+
+        let syncedCount = progressCalculator.syncedDiscoveredStarCount(
             now: now,
             startedAt: session.startedAt,
             pausedAccumulated: runtimeState.pausedAccumulated,
             pausedAt: runtimeState.pausedAt,
-            elapsedOffset: runtimeState.elapsedOffset, // 🔥 날아갔던 파라미터 복구
+            elapsedOffset: runtimeState.elapsedOffset,
             durationSeconds: session.slotSeconds,
             totalStars: totalStars
         )
@@ -99,7 +100,7 @@ final class SessionStore: ObservableObject {
         session.discoveredStarCount = min(max(syncedCount, session.discoveredStarCount), totalStars)
 
         let elapsed = activeElapsed(now: now)
-        if elapsed >= TimeInterval(session.slotSeconds) {
+        if progressCalculator.shouldComplete(elapsedActive: elapsed, durationSeconds: session.slotSeconds) {
             session.discoveredStarCount = totalStars
             session.status = .completed
             session.endedAt = now
@@ -113,17 +114,23 @@ final class SessionStore: ObservableObject {
         return (session.discoveredStarCount > previousCount, nil)
     }
 
-    // 2. 🔥 activeElapsed에 elapsedOffset 더하는 로직 복구
     func activeElapsed(now: Date = Date()) -> TimeInterval {
         guard let session = currentSession, let runtimeState else { return 0 }
-        let effectiveNow = runtimeState.pausedAt ?? now
-        return max(0, effectiveNow.timeIntervalSince(session.startedAt) - runtimeState.pausedAccumulated + runtimeState.elapsedOffset)
+        return progressCalculator.activeElapsed(
+            startedAt: session.startedAt,
+            now: now,
+            pausedAccumulated: runtimeState.pausedAccumulated,
+            pausedAt: runtimeState.pausedAt,
+            elapsedOffset: runtimeState.elapsedOffset
+        )
     }
 
     func remainingSeconds(now: Date = Date()) -> Int {
         guard let session = currentSession else { return 0 }
-        let remaining = TimeInterval(session.slotSeconds) - activeElapsed(now: now)
-        return max(0, Int(remaining.rounded(.up)))
+        return progressCalculator.remainingSeconds(
+            elapsedActive: activeElapsed(now: now),
+            durationSeconds: session.slotSeconds
+        )
     }
 
     func pausedAccumulatedSeconds() -> TimeInterval {
@@ -157,7 +164,6 @@ final class SessionStore: ObservableObject {
         completedSessions.first { $0.constellationId == constellationId }
     }
 
-    // 3. 🔥 advanceToNextStar 옛날 방식(숫자만 +1)에서 시간 타임워프 방식으로 복구
     @discardableResult
     func advanceToNextStar(
         totalStars: Int,
@@ -170,11 +176,13 @@ final class SessionStore: ObservableObject {
         guard var runtimeState else { return (false, nil) }
 
         let elapsedNow = activeElapsed(now: now)
-        let duration = TimeInterval(session.slotSeconds)
-        let interval = duration / TimeInterval(totalStars)
-        let nextEventElapsed = min(duration, TimeInterval(session.discoveredStarCount + 1) * interval)
-        let targetElapsed = max(elapsedNow, nextEventElapsed - max(0, leadSeconds))
-        let delta = max(0, targetElapsed - elapsedNow)
+        let delta = progressCalculator.nextStarAdvanceDelta(
+            elapsedNow: elapsedNow,
+            discoveredStarCount: session.discoveredStarCount,
+            totalStars: totalStars,
+            durationSeconds: session.slotSeconds,
+            leadSeconds: leadSeconds
+        )
 
         guard delta > 0 else { return (false, nil) }
         runtimeState.elapsedOffset += delta
@@ -183,7 +191,7 @@ final class SessionStore: ObservableObject {
         currentSession = session
         return (true, nil)
     }
-    
+
     @discardableResult
     func advanceToFinalStar(
         totalStars: Int,
@@ -196,9 +204,11 @@ final class SessionStore: ObservableObject {
         guard var runtimeState else { return false }
 
         let elapsedNow = activeElapsed(now: now)
-        let duration = TimeInterval(session.slotSeconds)
-        let targetElapsed = max(elapsedNow, max(0, duration - max(0, leadSeconds)))
-        let delta = max(0, targetElapsed - elapsedNow)
+        let delta = progressCalculator.finalStarAdvanceDelta(
+            elapsedNow: elapsedNow,
+            durationSeconds: session.slotSeconds,
+            leadSeconds: leadSeconds
+        )
 
         guard delta > 0 else { return false }
         runtimeState.elapsedOffset += delta
@@ -206,12 +216,11 @@ final class SessionStore: ObservableObject {
         currentSession = session
         return true
     }
-    
-    // MARK: - 튜토리얼용 타임워프 함수 (그대로 유지)
+
     func fastForwardTutorial(by seconds: TimeInterval) {
         guard var state = runtimeState, currentSession?.status == .running else { return }
         state.elapsedOffset += seconds
-        self.runtimeState = state
-        self.objectWillChange.send() // UI 즉각 갱신
+        runtimeState = state
+        objectWillChange.send()
     }
 }

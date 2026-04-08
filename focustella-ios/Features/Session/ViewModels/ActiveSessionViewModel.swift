@@ -1,5 +1,5 @@
 // 📂 Features/Session/ViewModels/ActiveSessionViewModel.swift
-import SwiftUI
+import Foundation
 import Combine
 import UserNotifications
 
@@ -17,7 +17,7 @@ final class ActiveSessionViewModel: ObservableObject {
     private let activeSessionStartDateKey = "Focustella_ActiveSessionStartDate"
     
     // 편의 이니셜라이저 (DI - 의존성 주입)
-    init(saveDailySessionUseCase: SaveDailySessionUseCase = SaveDailySessionUseCase(repository: DailySessionRepositoryImpl())) {
+    init(saveDailySessionUseCase: SaveDailySessionUseCase) {
         self.saveDailySessionUseCase = saveDailySessionUseCase
         requestNotificationPermission()
         loadActiveSession()
@@ -111,7 +111,9 @@ final class ActiveSessionViewModel: ObservableObject {
     }
     
     func removeActiveItem(at offsets: IndexSet) {
-        activeItems.remove(atOffsets: offsets)
+        for index in offsets.sorted(by: >) where activeItems.indices.contains(index) {
+            activeItems.remove(at: index)
+        }
         saveActiveSession()
     }
     

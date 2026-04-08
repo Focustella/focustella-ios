@@ -6,8 +6,7 @@ struct TemplateSelectionView: View {
     @ObservedObject var activeViewModel: ActiveSessionViewModel
     @Binding var showingAddTemplate: Bool
     @Binding var templateToEdit: ChecklistTemplate?
-    
-    @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
+    let hasSeenTutorial: Bool
     
     var body: some View {
         Group {
