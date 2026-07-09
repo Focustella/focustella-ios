@@ -2,8 +2,6 @@ import SwiftUI
 
 struct MySkyBottomCTAView: View {
     let isVisible: Bool
-    let hasLaidOut: Bool
-    let fadeDuration: TimeInterval
     let bottomInset: CGFloat
     let onTapDaily: () -> Void
     let onTapFocus: () -> Void
@@ -31,6 +29,5 @@ struct MySkyBottomCTAView: View {
         .padding(.bottom, bottomInset)
         .opacity(isVisible ? 1 : 0)
         .allowsHitTesting(isVisible)
-        .animation(hasLaidOut ? .easeInOut(duration: fadeDuration) : nil, value: isVisible)
     }
 }

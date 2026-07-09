@@ -5,6 +5,7 @@ struct CompletionAnimation: View {
     let reduceMotion: Bool
     let highPerformanceMode: Bool
     let edgeRevealOrder: [Int]
+    let userSeed: Int
     let onFinished: () -> Void
 
     @State private var sparklingIndices: Set<Int> = []
@@ -22,7 +23,8 @@ struct CompletionAnimation: View {
                 highPerformanceMode: highPerformanceMode,
                 sparklingIndices: sparklingIndices,
                 edgeRevealOrder: edgeRevealOrder,
-                activeBirthEffect: nil
+                activeBirthEffect: nil,
+                userSeed: userSeed
             )
             .task {
                 await runSequence()

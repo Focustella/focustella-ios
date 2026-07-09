@@ -18,6 +18,7 @@ struct SettledConstellationsCanvas: View {
     let highPerformanceMode: Bool
     let isInteracting: Bool
     let animationTime: TimeInterval?
+    let userSeed: Int
 
     var body: some View {
         Canvas(opaque: false, rendersAsynchronously: !isInteracting) { context, _ in
@@ -61,7 +62,7 @@ struct SettledConstellationsCanvas: View {
         let metadata = item.metadata
         let screenPoints = metadata.starSkyPoints.map { coordinateMapper.screenPoint(fromSky: $0, camera: camera) }
         let basePalette = basePalette(seed: metadata.paletteSeed)
-        let discoveredCount = min(item.discoveredStarCount, screenPoints.count)
+        let discoveredCount = min(item.discoveredStarCount, screenPoints.count, metadata.constellation.stars.count)
         let edgePulse = shouldAnimate ? (sin(time * 0.85) + 1) / 2 : 0.35
         let edgeOpacity = shouldAnimate ? (0.11 + 0.08 * edgePulse) : 0.12
 
@@ -120,11 +121,16 @@ struct SettledConstellationsCanvas: View {
             let flicker = shouldAnimate ? (sin((time + phaseOffset) * 0.55 + phaseOffset * 1.6) + 1) / 2 : 0.5
             let palette = palette(for: index, base: basePalette)
             let glowOpacity = shouldAnimate ? (0.24 + 0.16 * flicker) : 0.24
-            let starSize: CGFloat = 8.2 + (shouldAnimate ? CGFloat(pulse) * 0.9 : 0)
+            let starScale = MySkyStarSizeScale.scale(
+                userSeed: userSeed,
+                constellationId: metadata.id,
+                starId: metadata.constellation.stars[index].id
+            )
+            let starSize: CGFloat = (8.2 + (shouldAnimate ? CGFloat(pulse) * 0.9 : 0)) * starScale
             let simplifiedStar = tier == .simplified
 
             if useLightweightShading || simplifiedStar {
-                let compactSize = simplifiedStar ? 5.0 : max(6.8, starSize * 0.9)
+                let compactSize = simplifiedStar ? 5.0 * starScale : max(6.8 * starScale, starSize * 0.9)
                 let compactRect = CGRect(
                     x: center.x - compactSize / 2,
                     y: center.y - compactSize / 2,

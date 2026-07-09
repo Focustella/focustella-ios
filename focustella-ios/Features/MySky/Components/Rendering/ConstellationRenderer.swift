@@ -18,6 +18,7 @@ struct ConstellationRenderer: View {
     var starStyle: StarAppearanceStyle = .realistic
     var activeBirthEffect: StarBirthEffectState? = nil
     var animationTime: TimeInterval? = nil
+    var userSeed: Int = 0
 
     var body: some View {
         let shouldAnimate = highPerformanceMode && !reduceMotion
@@ -123,6 +124,11 @@ struct ConstellationRenderer: View {
                 let phaseOffset = Double(star.x * 30 + star.y * 15)
                 let palette = starPalette(for: index, base: constellationBase)
                 let flareStride = constellation.starCount > 4 ? 12 : 6
+                let starSize = 11 * MySkyStarSizeScale.scale(
+                    userSeed: userSeed,
+                    constellationId: constellation.id,
+                    starId: star.id
+                )
 
                 if discovered || sparkle || isBirthStar {
                     ZStack {
@@ -135,7 +141,7 @@ struct ConstellationRenderer: View {
 
                         TwinklingStarNode(
                             position: nil,
-                            size: 11,
+                            size: starSize,
                             phaseOffset: phaseOffset,
                             color: palette.color,
                             baseRGB: palette.rgb,

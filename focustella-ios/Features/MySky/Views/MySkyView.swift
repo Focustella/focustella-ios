@@ -56,7 +56,6 @@ struct MySkyView: View {
     @State private var showCompletionRecordButton = false
     @State private var completionFlowTask: Task<Void, Never>?
     @State private var completionEdgeOrder: [Int] = []
-    @State private var hasLaidOutCTA = false
     @State private var hasInitializedView = false
     @State private var blackHolePrePresentationCamera: MySkyCameraState?
     @State private var skyState = MySkySceneState()
@@ -224,6 +223,7 @@ struct MySkyView: View {
                 if let constellation = completionConstellation {
                     CompletionAnimation(
                         constellation: constellation, reduceMotion: accessibility.isReduceMotionEnabled, highPerformanceMode: highPerformanceMode, edgeRevealOrder: completionEdgeOrder,
+                        userSeed: userSeed,
                         onFinished: {
                             completionConstellation = nil
                             startCompletionWrapUp(constellation: constellation, size: size)
@@ -305,7 +305,6 @@ struct MySkyView: View {
                 cameraState = tutorialCoordinator.initialCamera(hasSeenTutorial: hasSeenTutorial)
 
                 showCTA = sessionStore.currentSession == nil
-                hasLaidOutCTA = true
 
                 // Keep the first sky fetch on initial mount only so tab switches do not
                 // recreate the whole sky state and trigger another expensive re-render.
@@ -401,12 +400,11 @@ struct MySkyView: View {
             .overlay(alignment: .bottom) {
                 MySkyBottomCTAView(
                     isVisible: showCTA && sessionStore.currentSession == nil && tutorialStep == .done,
-                    hasLaidOut: hasLaidOutCTA,
-                    fadeDuration: ctaFadeDuration,
                     bottomInset: ctaBottomInset,
                     onTapDaily: { showDailySessionSheet = true },
                     onTapFocus: { showSlotPicker = true }
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
         } // ZStack 닫기
         .preferredColorScheme(.dark)
@@ -1074,7 +1072,8 @@ struct MySkyView: View {
                 reduceMotion: accessibility.isReduceMotionEnabled,
                 highPerformanceMode: highPerformanceMode,
                 isInteracting: isInteracting,
-                animationTime: animationTime
+                animationTime: animationTime,
+                userSeed: userSeed
             )
         }
     }
@@ -1135,7 +1134,8 @@ struct MySkyView: View {
                 edgeVisibilityOverrides: edgeState.visibilityOverrides,
                 starStyle: starStyle,
                 activeBirthEffect: hasBirthEffect ? activeStarBirthEffect : nil,
-                animationTime: animationTime
+                animationTime: animationTime,
+                userSeed: userSeed
             )
         }
     }
