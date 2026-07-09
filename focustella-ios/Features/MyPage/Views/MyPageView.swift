@@ -7,7 +7,7 @@ struct MyPageView: View {
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
-    @AppStorage("mySkyBackgroundVariant") private var backgroundVariant: MySkyBackgroundVariant = .focusStar
+    @AppStorage("mySkyBackgroundVariant") private var backgroundVariant: MySkyBackgroundVariant = .singularity
     
     @State private var showResetAlert: Bool = false
     @State private var showDeleteAlert: Bool = false

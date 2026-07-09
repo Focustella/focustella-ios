@@ -8,6 +8,7 @@ struct DevInsertionToolView: View {
     let isSessionRunning: Bool
     let onPlaceNextBatch: () -> Void
     let onReset: () -> Void
+    let onPrimeEasterEgg: () -> Void
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 10) {
@@ -32,6 +33,20 @@ struct DevInsertionToolView: View {
             }
 
             placementTool
+
+            Button("이스터에그") {
+                onPrimeEasterEgg()
+            }
+            .buttonStyle(.plain)
+            .font(.caption.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Color.black.opacity(0.55), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+            )
         }
     }
 

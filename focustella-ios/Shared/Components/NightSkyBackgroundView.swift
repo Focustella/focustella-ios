@@ -27,6 +27,8 @@ struct NightSkyBackgroundView: View {
             AuroraMySkyBackgroundView()
         case .mySkyDeepSpace:
             DeepSpaceMySkyBackgroundView()
+        case .mySkySingularity:
+            SingularityMySkyBackgroundView()
         }
     }
 }
@@ -37,16 +39,21 @@ enum NightSkyBackgroundStyle {
     case mySkyLegacy
     case mySkyAurora
     case mySkyDeepSpace
+    case mySkySingularity
 }
 
 struct NightSkyStarField: View {
-    var seed: UInt64? = nil
     let count: Int
-    var salt: String = "night-sky-field"
-    var profile: NightSkyStarProfile = .standard
+    private let stars: [NightSkyStarSpec]
 
-    private var stars: [NightSkyStarSpec] {
-        NightSkyStarFactory.makeStars(
+    init(
+        seed: UInt64? = nil,
+        count: Int,
+        salt: String = "night-sky-field",
+        profile: NightSkyStarProfile = .standard
+    ) {
+        self.count = count
+        self.stars = NightSkyStarFactory.makeStars(
             count: count,
             seed: seed,
             salt: salt,

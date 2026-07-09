@@ -9,6 +9,7 @@ struct ConstellationRenderer: View {
     let edgeProgress: CGFloat
     let reduceMotion: Bool
     let highPerformanceMode: Bool
+    var renderMetadata: MySkyConstellationRenderMetadata? = nil
     var discoveredStarIndices: Set<Int>? = nil
     var sparklingIndices: Set<Int> = []
     var edgeRevealOrder: [Int]? = nil
@@ -39,15 +40,21 @@ struct ConstellationRenderer: View {
     @ViewBuilder
     private func content(time: TimeInterval, shouldAnimate: Bool) -> some View {
         let mapper = coordinateMapper
-        let pointsById = Dictionary(uniqueKeysWithValues: constellation.stars.map { star in
-            (
-                star.id,
-                mapper.screenPoint(fromSky: CGPoint(x: star.x, y: star.y), camera: camera)
-            )
-        })
+        let metadata = renderMetadata
+        let screenPoints = (metadata?.starSkyPoints ?? constellation.stars.map { CGPoint(x: $0.x, y: $0.y) })
+            .map { mapper.screenPoint(fromSky: $0, camera: camera) }
         let constellationBase = basePaletteForConstellation()
         let birthSegments = activeBirthEffect?.connectionPairs.compactMap { pair -> StarBirthSegment? in
-            guard let from = pointsById[pair.fromStarId], let to = pointsById[pair.toStarId] else { return nil }
+            let fromIndex = metadata?.starIndex(for: pair.fromStarId) ?? constellation.stars.firstIndex { $0.id == pair.fromStarId }
+            let toIndex = metadata?.starIndex(for: pair.toStarId) ?? constellation.stars.firstIndex { $0.id == pair.toStarId }
+            guard
+                let fromIndex,
+                let toIndex,
+                screenPoints.indices.contains(fromIndex),
+                screenPoints.indices.contains(toIndex)
+            else { return nil }
+            let from = screenPoints[fromIndex]
+            let to = screenPoints[toIndex]
             return StarBirthSegment(from: from, to: to)
         } ?? []
 
@@ -68,6 +75,7 @@ struct ConstellationRenderer: View {
                 let edgeGlow = shouldAnimate ? (1.7 + CGFloat(edgePulse) * 1.9) : 0
                 let edgeBaseColor = constellationBase.color
                 let orderedIndices = edgeRevealOrder ?? Array(constellation.edges.indices)
+                let edgeIndexPairs = metadata?.edgeIndexPairs
 
                 ForEach(Array(orderedIndices.enumerated()), id: \.offset) { order, edgeIndex in
                     let isVisible = visibleEdgeIndices?.contains(edgeIndex) ?? true
@@ -77,8 +85,14 @@ struct ConstellationRenderer: View {
                             let eased = local * local * (3 - 2 * local)
                             let visibility = edgeVisibilityOverrides?[edgeIndex] ?? 1
                             if visibility > 0 {
-                                let edge = constellation.edges[edgeIndex]
-                                if let from = pointsById[edge.from], let to = pointsById[edge.to] {
+                                if let pair = edgePair(
+                                    at: edgeIndex,
+                                    metadataPairs: edgeIndexPairs
+                                ),
+                                   screenPoints.indices.contains(pair.from),
+                                   screenPoints.indices.contains(pair.to) {
+                                    let from = screenPoints[pair.from]
+                                    let to = screenPoints[pair.to]
                                     Path { path in
                                         path.move(to: from)
                                         path.addLine(to: to)
@@ -102,7 +116,7 @@ struct ConstellationRenderer: View {
                 let discovered = discoveredStarIndices?.contains(index) ?? (index < discoveredStarCount)
                 let sparkle = sparklingIndices.contains(index)
                 let isBirthStar = activeBirthEffect?.starId == star.id
-                let position = mapper.screenPoint(
+                let position = screenPoints.indices.contains(index) ? screenPoints[index] : mapper.screenPoint(
                     fromSky: CGPoint(x: star.x, y: star.y),
                     camera: camera
                 )
@@ -140,6 +154,23 @@ struct ConstellationRenderer: View {
             }
         }
         .frame(width: mapper.canvasSize.width, height: mapper.canvasSize.height)
+    }
+
+    private func edgePair(
+        at index: Int,
+        metadataPairs: [(from: Int, to: Int)?]?
+    ) -> (from: Int, to: Int)? {
+        if let pair = metadataPairs?[safe: index] ?? nil {
+            return pair
+        }
+
+        guard constellation.edges.indices.contains(index) else { return nil }
+        let edge = constellation.edges[index]
+        guard
+            let from = constellation.stars.firstIndex(where: { $0.id == edge.from }),
+            let to = constellation.stars.firstIndex(where: { $0.id == edge.to })
+        else { return nil }
+        return (from, to)
     }
 
     private func starPalette(for index: Int, base: StarPalette) -> StarPalette {
@@ -639,5 +670,11 @@ private struct StarFlare: View {
                 .blur(radius: thickness * 0.5)
         }
         .allowsHitTesting(false)
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

@@ -2,12 +2,12 @@ import SwiftUI
 
 struct SettledConstellationsCanvas: View {
     struct Item: Identifiable {
-        let constellation: Constellation
+        let metadata: MySkyConstellationRenderMetadata
         let discoveredStarCount: Int
         let visibleEdgeIndices: Set<Int>
         let edgeVisibilityOverrides: [Int: CGFloat]
 
-        var id: UUID { constellation.id }
+        var id: UUID { metadata.id }
     }
 
     let items: [Item]
@@ -23,7 +23,7 @@ struct SettledConstellationsCanvas: View {
         Canvas(opaque: false, rendersAsynchronously: !isInteracting) { context, _ in
             let shouldAnimate = highPerformanceMode && !reduceMotion && !isInteracting
             // Keep drag rendering policy identical to high-performance mode across all modes.
-            let useLightweightShading = false
+            let useLightweightShading = isInteracting
             let time = animationTime ?? 0
             let viewportRect = CGRect(origin: .zero, size: coordinateMapper.canvasSize)
             let detailedRenderRect = viewportRect.insetBy(dx: -48, dy: -48)
@@ -58,24 +58,23 @@ struct SettledConstellationsCanvas: View {
         detailedRenderRect: CGRect,
         simplifiedRenderRect: CGRect
     ) {
-        let pointsById = Dictionary(uniqueKeysWithValues: item.constellation.stars.map { star in
-            (
-                star.id,
-                coordinateMapper.screenPoint(fromSky: CGPoint(x: star.x, y: star.y), camera: camera)
-            )
-        })
-        let basePalette = basePalette(for: item.constellation)
-        let discoveredCount = min(item.discoveredStarCount, item.constellation.stars.count)
+        let metadata = item.metadata
+        let screenPoints = metadata.starSkyPoints.map { coordinateMapper.screenPoint(fromSky: $0, camera: camera) }
+        let basePalette = basePalette(seed: metadata.paletteSeed)
+        let discoveredCount = min(item.discoveredStarCount, screenPoints.count)
         let edgePulse = shouldAnimate ? (sin(time * 0.85) + 1) / 2 : 0.35
         let edgeOpacity = shouldAnimate ? (0.11 + 0.08 * edgePulse) : 0.12
 
-        for edgeIndex in item.visibleEdgeIndices.sorted() {
-            guard item.constellation.edges.indices.contains(edgeIndex) else { continue }
+        for edgeIndex in item.visibleEdgeIndices {
+            guard metadata.edgeIndexPairs.indices.contains(edgeIndex) else { continue }
             let visibility = max(0, min(1, item.edgeVisibilityOverrides[edgeIndex] ?? 1))
             guard visibility > 0 else { continue }
 
-            let edge = item.constellation.edges[edgeIndex]
-            guard let from = pointsById[edge.from], let to = pointsById[edge.to] else { continue }
+            guard let edge = metadata.edgeIndexPairs[edgeIndex],
+                  screenPoints.indices.contains(edge.from),
+                  screenPoints.indices.contains(edge.to) else { continue }
+            let from = screenPoints[edge.from]
+            let to = screenPoints[edge.to]
             let fromTier = renderTier(at: from, detailedRect: detailedRenderRect, simplifiedRect: simplifiedRenderRect)
             let toTier = renderTier(at: to, detailedRect: detailedRenderRect, simplifiedRect: simplifiedRenderRect)
             if fromTier == .culled && toTier == .culled { continue }
@@ -111,12 +110,12 @@ struct SettledConstellationsCanvas: View {
         }
 
         for index in 0..<discoveredCount {
-            let star = item.constellation.stars[index]
-            guard let center = pointsById[star.id] else { continue }
+            let center = screenPoints[index]
             let tier = renderTier(at: center, detailedRect: detailedRenderRect, simplifiedRect: simplifiedRenderRect)
             if tier == .culled { continue }
 
-            let phaseOffset = Double(star.x * 30 + star.y * 15)
+            let skyPoint = metadata.starSkyPoints[index]
+            let phaseOffset = Double(skyPoint.x * 30 + skyPoint.y * 15)
             let pulse = shouldAnimate ? (sin((time + phaseOffset) * 1.2) + 1) / 2 : 0.5
             let flicker = shouldAnimate ? (sin((time + phaseOffset) * 0.55 + phaseOffset * 1.6) + 1) / 2 : 0.5
             let palette = palette(for: index, base: basePalette)
@@ -174,7 +173,7 @@ struct SettledConstellationsCanvas: View {
         return StarPalette(color: Color(red: red, green: green, blue: blue), rgb: (red, green, blue))
     }
 
-    private func basePalette(for constellation: Constellation) -> StarPalette {
+    private func basePalette(seed: Int) -> StarPalette {
         let palette: [StarPalette] = [
             StarPalette(color: Color(red: 1.0, green: 0.45, blue: 0.4), rgb: (1.0, 0.45, 0.4)),
             StarPalette(color: Color(red: 0.49, green: 0.78, blue: 1.0), rgb: (0.49, 0.78, 1.0)),
@@ -184,8 +183,7 @@ struct SettledConstellationsCanvas: View {
             StarPalette(color: Color(red: 1.0, green: 0.62, blue: 0.78), rgb: (1.0, 0.62, 0.78)),
             StarPalette(color: Color(red: 0.62, green: 1.0, blue: 0.96), rgb: (0.62, 1.0, 0.96))
         ]
-        let key = constellation.id.uuidString.unicodeScalars.reduce(0) { $0 + Int($1.value) }
-        return palette[key % palette.count]
+        return palette[seed % palette.count]
     }
 
     private func starPath(in rect: CGRect) -> Path {

@@ -6,6 +6,7 @@ struct MySkySceneState {
     var edgeRevealStates: [UUID: MySkyEdgeRevealState] = [:]
 
     private var constellationsById: [UUID: Constellation] = [:]
+    private var renderMetadataById: [UUID: MySkyConstellationRenderMetadata] = [:]
     private var constellationOrder: [UUID] = []
 
     var constellations: [Constellation] {
@@ -14,6 +15,10 @@ struct MySkySceneState {
 
     func constellation(id: UUID) -> Constellation? {
         constellationsById[id]
+    }
+
+    func renderMetadata(id: UUID) -> MySkyConstellationRenderMetadata? {
+        renderMetadataById[id]
     }
 
     func containsConstellation(id: UUID) -> Bool {
@@ -51,12 +56,14 @@ struct MySkySceneState {
             constellationOrder.append(constellation.id)
         }
         constellationsById[constellation.id] = constellation
+        renderMetadataById[constellation.id] = MySkyConstellationRenderMetadata(constellation: constellation)
     }
 
     mutating func removeConstellations(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         constellationOrder.removeAll { ids.contains($0) }
         constellationsById = constellationsById.filter { !ids.contains($0.key) }
+        renderMetadataById = renderMetadataById.filter { !ids.contains($0.key) }
         visibleDiscoveredStarCounts = visibleDiscoveredStarCounts.filter { !ids.contains($0.key) }
         edgeRevealStates = edgeRevealStates.filter { !ids.contains($0.key) }
     }
@@ -72,6 +79,11 @@ struct MySkySceneState {
     private mutating func replaceConstellations(_ constellations: [Constellation]) {
         constellationOrder = constellations.map(\.id)
         constellationsById = Dictionary(uniqueKeysWithValues: constellations.map { ($0.id, $0) })
+        renderMetadataById = Dictionary(
+            uniqueKeysWithValues: constellations.map {
+                ($0.id, MySkyConstellationRenderMetadata(constellation: $0))
+            }
+        )
     }
 
     private mutating func syncCompletedSessionRenderState(_ sessions: [FocusSession]) {

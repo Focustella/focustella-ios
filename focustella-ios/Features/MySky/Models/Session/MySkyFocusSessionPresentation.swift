@@ -6,6 +6,7 @@ struct MySkyFocusSessionPresentation {
     let renderedDiscoveredCount: Int
     let edgeRevealState: MySkyEdgeRevealState
     let activeBirthEffect: StarBirthEffectState?
+    let discoveryOrder: [Int]
 
     enum Phase: Equatable {
         case waitingForSchedule(orderIndex: Int)
@@ -13,69 +14,20 @@ struct MySkyFocusSessionPresentation {
         case completed
     }
 
-    var discoveryOrder: [Int] {
-        guard !constellation.stars.isEmpty else { return [] }
-
-        let focus = ConstellationGeometry(constellation: constellation).visualFocusPoint
-        let idToIndex = Dictionary(uniqueKeysWithValues: constellation.stars.enumerated().map { ($0.element.id, $0.offset) })
-        let startIndex = constellation.stars.enumerated().min { lhs, rhs in
-            let lhsDistance = hypot(lhs.element.x - focus.x, lhs.element.y - focus.y)
-            let rhsDistance = hypot(rhs.element.x - focus.x, rhs.element.y - focus.y)
-            if lhsDistance == rhsDistance { return lhs.offset < rhs.offset }
-            return lhsDistance < rhsDistance
-        }?.offset ?? 0
-
-        var adjacency: [Int: Set<Int>] = [:]
-        for edge in constellation.edges {
-            guard let fromIndex = idToIndex[edge.from], let toIndex = idToIndex[edge.to] else { continue }
-            adjacency[fromIndex, default: []].insert(toIndex)
-            adjacency[toIndex, default: []].insert(fromIndex)
-        }
-
-        func distanceToFocus(_ index: Int) -> CGFloat {
-            hypot(constellation.stars[index].x - focus.x, constellation.stars[index].y - focus.y)
-        }
-
-        func starOrderPriority(_ lhs: Int, _ rhs: Int) -> Bool {
-            let lhsDistance = distanceToFocus(lhs)
-            let rhsDistance = distanceToFocus(rhs)
-            if lhsDistance == rhsDistance { return lhs < rhs }
-            return lhsDistance < rhsDistance
-        }
-
-        var visited: Set<Int> = []
-        var order: [Int] = []
-
-        func traverseDepthFirst(from root: Int) {
-            var stack: [Int] = [root]
-            while let current = stack.popLast() {
-                guard !visited.contains(current) else { continue }
-                visited.insert(current)
-                order.append(current)
-
-                let neighbors = adjacency[current, default: []]
-                    .filter { !visited.contains($0) }
-                    .sorted(by: starOrderPriority)
-
-                // Stack is LIFO, so reverse to visit nearest neighbors first.
-                for neighbor in neighbors.reversed() {
-                    stack.append(neighbor)
-                }
-            }
-        }
-
-        traverseDepthFirst(from: startIndex)
-
-        while visited.count < constellation.stars.count {
-            guard let nextRoot = constellation.stars.indices
-                .filter({ !visited.contains($0) })
-                .min(by: starOrderPriority) else {
-                break
-            }
-            traverseDepthFirst(from: nextRoot)
-        }
-
-        return order
+    init(
+        constellation: Constellation,
+        actualDiscoveredCount: Int,
+        renderedDiscoveredCount: Int,
+        edgeRevealState: MySkyEdgeRevealState,
+        activeBirthEffect: StarBirthEffectState?,
+        discoveryOrder: [Int]? = nil
+    ) {
+        self.constellation = constellation
+        self.actualDiscoveredCount = actualDiscoveredCount
+        self.renderedDiscoveredCount = renderedDiscoveredCount
+        self.edgeRevealState = edgeRevealState
+        self.activeBirthEffect = activeBirthEffect
+        self.discoveryOrder = discoveryOrder ?? MySkyConstellationRenderMetadata(constellation: constellation).discoveryOrder
     }
 
     var discoveredStarIndices: Set<Int> {

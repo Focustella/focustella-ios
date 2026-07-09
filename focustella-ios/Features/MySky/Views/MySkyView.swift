@@ -13,11 +13,12 @@ struct MySkyView: View {
     @StateObject private var accessibility = AppAccessibility.shared
     @StateObject private var devInsertionCoordinator = DevInsertionCoordinator()
     @StateObject private var inputProtectionCoordinator = MySkyInputProtectionCoordinator()
+    @StateObject private var blackHoleCoordinator = MySkyBlackHoleCoordinator()
     @StateObject private var dailyRewardStore = MySkyDailyRewardStore()
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("starStyle") private var starStyle: StarAppearanceStyle = .realistic
-    @AppStorage("mySkyBackgroundVariant") private var backgroundVariant: MySkyBackgroundVariant = .focusStar
+    @AppStorage("mySkyBackgroundVariant") private var backgroundVariant: MySkyBackgroundVariant = .singularity
     @AppStorage("userId") private var userId: String = ""
     @AppStorage("userSeed") private var userSeed: Int = 0
     
@@ -59,6 +60,7 @@ struct MySkyView: View {
     @State private var dailyRewardTextTask: Task<Void, Never>?
     @State private var hasLaidOutCTA = false
     @State private var hasInitializedView = false
+    @State private var blackHolePrePresentationCamera: MySkyCameraState?
     @State private var skyState = MySkySceneState()
     @State private var edgeRevealTokens: [UUID: Int] = [:]
     @State private var isFetchingSky = false
@@ -67,6 +69,8 @@ struct MySkyView: View {
     private let ctaFadeDuration: Double = 0.38
     private let ctaIdleDelay: Double = 1.5
     private let sessionAutoZoom: CGFloat = 2.0
+    private let blackHolePresentationZoom: CGFloat = 0.22
+    private let blackHolePreludeDelay: TimeInterval = 1.05
     private let tutorialGoldenStarSkyPoint = CGPoint(x: 0.5, y: 0.5)
     private let tutorialSessionZoom: CGFloat = 1.35
 
@@ -77,7 +81,48 @@ struct MySkyView: View {
         pendingMemoSessionId != nil ||
         showMemoSheet ||
         tutorialStep != .done ||
-        inputProtectionCoordinator.isActive
+        inputProtectionCoordinator.isActive ||
+        blackHoleCoordinator.isInputLocked
+    }
+
+    private var canRunBlackHoleEffect: Bool {
+        tutorialStep == .done &&
+        sessionStore.currentSession == nil &&
+        !showMemoSheet &&
+        pendingMemoSessionId == nil
+    }
+
+    private var skyLayerOpacityForBlackHole: Double {
+        switch blackHoleCoordinator.phase {
+        case .stage7Spawning, .stage7Absorbing, .stage7AwaitingInput, .stage8Collapsing, .blackout:
+            return 0
+        case .whiteFlash:
+            return 0
+        default:
+            return 1
+        }
+    }
+
+    private var blackHoleBackgroundOpacity: Double {
+        let overlayOpacity = Double(max(0, min(1, blackHoleCoordinator.overlay.opacity)))
+        let blackout = Double(max(0, min(1, blackHoleCoordinator.absorption.blackout)))
+
+        switch blackHoleCoordinator.phase {
+        case .stage7Spawning:
+            return min(0.86, 0.08 + overlayOpacity * 0.82)
+        case .stage7Absorbing:
+            return min(0.94, 0.46 + overlayOpacity * 0.38 + blackout * 0.22)
+        case .stage7AwaitingInput:
+            return 0.92
+        case .stage8Collapsing:
+            return max(0, 0.06 + overlayOpacity * 0.62)
+        case .blackout:
+            return 1
+        case .whiteFlash:
+            return max(0.82, Double(blackHoleCoordinator.whiteFlashOpacity))
+        default:
+            return 0
+        }
     }
 
     private var stateMerger: MySkyStateMerger {
@@ -109,6 +154,7 @@ struct MySkyView: View {
                     variant: backgroundVariant
                 )
                 interactiveSkyLayer(size: size)
+                blackHoleVisualLayer(size: size)
                 
                 if let session = sessionStore.currentSession, let constellation = constellationById(session.constellationId) {
                     VStack {
@@ -217,6 +263,11 @@ struct MySkyView: View {
                         },
                         onReset: {
                             devInsertionCoordinator.reset(context: devInsertionContext)
+                        },
+                        onPrimeEasterEgg: {
+                            inputProtectionCoordinator.setActivationCountForDebug(6)
+                            interactionController.prepareForNextProtectionActivation()
+                            Haptics.light()
                         }
                     )
                     .padding(.top, proxy.safeAreaInsets.top + 56)
@@ -225,7 +276,7 @@ struct MySkyView: View {
             }
             .overlay(alignment: .top) {
                 if inputProtectionCoordinator.isBannerVisible {
-                    InputProtectionBannerView()
+                    InputProtectionBannerView(message: inputProtectionCoordinator.bannerMessage)
                     .padding(.top, proxy.safeAreaInsets.top + 64)
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -237,6 +288,10 @@ struct MySkyView: View {
                 showDailyRewardText = false
                 dailyRewardStore.clearSelection()
                 inputProtectionCoordinator.reset()
+                inputProtectionCoordinator.resetActivationProgress()
+                interactionController.prepareForNextProtectionActivation()
+                blackHoleCoordinator.resetAfterCooldown()
+                blackHolePrePresentationCamera = nil
                 devInsertionCoordinator.reset(context: devInsertionContext)
             }
             .toolbar {
@@ -247,6 +302,7 @@ struct MySkyView: View {
             .onAppear {
                 canvasSize = size
                 dailyRewardStore.loadFromStorage()
+                blackHoleCoordinator.setFeatureEnabled(canRunBlackHoleEffect)
                 guard !hasInitializedView else { return }
 
                 hasInitializedView = true
@@ -273,6 +329,21 @@ struct MySkyView: View {
                 if !enabled {
                     devInsertionCoordinator.reset(context: devInsertionContext)
                 }
+            }
+            .onChange(of: canRunBlackHoleEffect) { _, enabled in
+                blackHoleCoordinator.setFeatureEnabled(enabled)
+                if !enabled {
+                    inputProtectionCoordinator.resetActivationProgress()
+                    blackHolePrePresentationCamera = nil
+                }
+            }
+            .onChange(of: inputProtectionCoordinator.isActive) { _, isActive in
+                if !isActive {
+                    interactionController.prepareForNextProtectionActivation()
+                }
+            }
+            .onChange(of: blackHoleCoordinator.phase) { oldValue, newValue in
+                handleBlackHolePhaseChange(from: oldValue, to: newValue)
             }
             .onChange(of: size) { _, newValue in canvasSize = newValue }
             .onReceive(tick) { now in syncSession(now: now) }
@@ -461,6 +532,10 @@ struct MySkyView: View {
         }
     // MARK: - 기존 로직 유지
     private func constellationById(_ id: UUID) -> Constellation? { skyState.constellation(id: id) }
+
+    private func renderMetadataById(_ id: UUID) -> MySkyConstellationRenderMetadata? {
+        skyState.renderMetadata(id: id)
+    }
 
     private func requestStartSession(slotSeconds: Int) {
         Task { @MainActor in
@@ -674,6 +749,16 @@ struct MySkyView: View {
         }
 
         guard didActivate else { return }
+
+        if canRunBlackHoleEffect {
+            let activationCount = inputProtectionCoordinator.activationCount
+            blackHoleCoordinator.registerProtectionActivation(
+                activationCount: activationCount,
+                reduceMotion: accessibility.isReduceMotionEnabled,
+                preSpawnDelay: activationCount >= 7 ? blackHolePreludeDelay : 0
+            )
+        }
+
         Haptics.warning()
         let payload: [String: Any] = [
             "event": "input-protection-activated",
@@ -719,7 +804,14 @@ struct MySkyView: View {
             },
             onInteractionBegan: registerInteraction,
             onInteractionEnded: endInteraction,
-            onInputPressureDetected: handleInputPressureDetected
+            onInputPressureDetected: handleInputPressureDetected,
+            onInputStressChanged: { stress in
+                if canRunBlackHoleEffect {
+                    blackHoleCoordinator.updateStress(score: stress)
+                } else {
+                    blackHoleCoordinator.updateStress(score: 0)
+                }
+            }
         )
     }
 
@@ -737,9 +829,12 @@ struct MySkyView: View {
 
     @ViewBuilder
     private func interactiveSkyLayer(size: CGSize) -> some View {
+        let shouldRenderSkyLayer = skyLayerOpacityForBlackHole > 0.001
         let shouldUseSharedTimeline = !isInteracting && (((highPerformanceMode && !accessibility.isReduceMotionEnabled) || activeStarBirthEffect != nil))
         let renderedSky = Group {
-            if shouldUseSharedTimeline {
+            if !shouldRenderSkyLayer {
+                Color.clear
+            } else if shouldUseSharedTimeline {
                 TimelineView(.periodic(from: .now, by: 1.0 / 8.0)) { context in
                     skyCanvas(size: size, animationTime: context.date.timeIntervalSinceReferenceDate)
                         .overlay {
@@ -762,6 +857,8 @@ struct MySkyView: View {
 
         let interactionContainer = ZStack {
             renderedSky
+                .opacity(skyLayerOpacityForBlackHole)
+                .animation(.easeInOut(duration: 0.24), value: skyLayerOpacityForBlackHole)
         }
         .frame(width: size.width, height: size.height)
 
@@ -799,7 +896,8 @@ struct MySkyView: View {
             actualDiscoveredCount: actualDiscoveredCount,
             renderedDiscoveredCount: renderedDiscoveredCount,
             edgeRevealState: skyState.edgeRevealStates[constellation.id] ?? MySkyEdgeRevealState(),
-            activeBirthEffect: activeStarBirthEffect?.constellationId == constellation.id ? activeStarBirthEffect : nil
+            activeBirthEffect: activeStarBirthEffect?.constellationId == constellation.id ? activeStarBirthEffect : nil,
+            discoveryOrder: renderMetadataById(constellation.id)?.discoveryOrder
         )
     }
 
@@ -862,7 +960,7 @@ struct MySkyView: View {
     ) {
         cameraTransitionTask?.cancel()
         let startCamera = cameraState
-        let frameCount = max(12, Int(duration * 60))
+        let frameCount = max(12, Int(duration * 30))
 
         cameraTransitionTask = Task { @MainActor in
             for step in 1...frameCount {
@@ -929,6 +1027,9 @@ struct MySkyView: View {
 
     private func runningEdgeIndices(constellation: Constellation, discoveredCount: Int) -> Set<Int> {
         guard discoveredCount > 0 else { return [] }
+        if let metadata = renderMetadataById(constellation.id) {
+            return metadata.visibleEdgeIndices(forDiscoveredCount: discoveredCount)
+        }
         let presentation = focusSessionPresentation(for: constellation)
         let discoveredIds = Set(presentation.stars(forDiscoveredCount: discoveredCount).map(\.id))
         var indices: Set<Int> = []
@@ -1020,14 +1121,15 @@ struct MySkyView: View {
         let settledItems: [SettledConstellationsCanvas.Item] = sessionStore.completedSessions.compactMap { session in
             guard completionConstellationId != session.constellationId,
                   liveConstellationId != session.constellationId,
-                  let constellation = constellationById(session.constellationId) else {
+                  let metadata = renderMetadataById(session.constellationId) else {
                 return nil
             }
 
+            let constellation = metadata.constellation
             let visibleCount = skyState.visibleDiscoveredStarCounts[session.constellationId] ?? constellation.starCount
             let edgeState = edgeRenderState(for: constellation)
             return SettledConstellationsCanvas.Item(
-                constellation: constellation,
+                metadata: metadata,
                 discoveredStarCount: visibleCount,
                 visibleEdgeIndices: edgeState.visibleIndices,
                 edgeVisibilityOverrides: edgeState.visibilityOverrides
@@ -1098,6 +1200,7 @@ struct MySkyView: View {
                 edgeProgress: 1,
                 reduceMotion: accessibility.isReduceMotionEnabled,
                 highPerformanceMode: highPerformanceMode,
+                renderMetadata: renderMetadataById(constellation.id),
                 discoveredStarIndices: presentation.discoveredStarIndices,
                 visibleEdgeIndices: edgeState.visibleIndices,
                 edgeVisibilityOverrides: edgeState.visibilityOverrides,
@@ -1118,6 +1221,118 @@ struct MySkyView: View {
             )
             .id("daily-ripple-\(spawnEffectToken)")
             .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private func blackHoleVisualLayer(size: CGSize) -> some View {
+        ZStack {
+            Color.black
+                .opacity(blackHoleBackgroundOpacity)
+                .ignoresSafeArea()
+                .animation(.easeInOut(duration: 0.30), value: blackHoleBackgroundOpacity)
+
+            if blackHoleCoordinator.showsAbsorptionCanvas {
+                BlackHoleAbsorptionCanvas(
+                    center: blackHoleCoordinator.overlay.center,
+                    phase: blackHoleCoordinator.phase,
+                    absorption: blackHoleCoordinator.absorption
+                )
+                .frame(width: size.width, height: size.height)
+            }
+
+            if blackHoleCoordinator.showsSingularityOverlay {
+                BlackHoleOverlayView(overlay: blackHoleCoordinator.overlay)
+                    .frame(width: size.width, height: size.height)
+            }
+
+            if blackHoleCoordinator.phase == .whiteFlash {
+                Color.black
+                    .opacity(blackHoleCoordinator.whiteFlashOpacity)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+
+            if blackHoleCoordinator.isAwaitingUserInputToReturn {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Text("화면을 탭하면 원래 하늘로 돌아갑니다")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(Color.black.opacity(0.45), in: Capsule())
+                        .overlay(
+                            Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        )
+                        .padding(.bottom, 132)
+                }
+                .transition(.opacity)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard blackHoleCoordinator.isAwaitingUserInputToReturn else { return }
+            blackHoleCoordinator.beginReturnToSky(reduceMotion: accessibility.isReduceMotionEnabled)
+        }
+        .allowsHitTesting(blackHoleCoordinator.isAwaitingUserInputToReturn)
+    }
+
+    private func handleBlackHolePhaseChange(
+        from oldValue: MySkyBlackHoleCoordinator.Phase,
+        to newValue: MySkyBlackHoleCoordinator.Phase
+    ) {
+        switch newValue {
+        case .stage4 where oldValue != .stage4:
+            Haptics.light()
+        case .stage7Spawning where oldValue != .stage7Spawning:
+            if blackHolePrePresentationCamera == nil {
+                blackHolePrePresentationCamera = cameraState
+            }
+            animateCamera(
+                to: MySkyCameraState(centerSky: MySkyCameraState.default.centerSky, zoom: blackHolePresentationZoom),
+                duration: accessibility.isReduceMotionEnabled ? 0.55 : 1.2
+            )
+            Haptics.warning()
+        case .stage7AwaitingInput where oldValue != .stage7AwaitingInput:
+            Haptics.light()
+        case .stage8Collapsing where oldValue != .stage8Collapsing:
+            animateCamera(
+                to: MySkyCameraState(
+                    centerSky: MySkyCameraState.default.centerSky,
+                    zoom: max(0.12, blackHolePresentationZoom * 0.55)
+                ),
+                duration: accessibility.isReduceMotionEnabled ? 0.35 : 0.70
+            )
+            Haptics.warning()
+        case .blackout where oldValue != .blackout:
+            Haptics.light()
+        case .whiteFlash where oldValue != .whiteFlash:
+            Haptics.light()
+        case .cooldown where oldValue != .cooldown:
+            dragStartCamera = nil
+            magnifyStartZoom = nil
+            isInteracting = false
+            inputProtectionCoordinator.reset()
+            interactionController.prepareForNextProtectionActivation()
+        case .idle where oldValue != .idle:
+            if oldValue == .blackout || oldValue == .whiteFlash || oldValue == .stage8Collapsing {
+                let restoreCamera = blackHolePrePresentationCamera ?? .default
+                animateCamera(
+                    to: restoreCamera,
+                    duration: accessibility.isReduceMotionEnabled ? 0.45 : 0.85
+                )
+            }
+            dragStartCamera = nil
+            magnifyStartZoom = nil
+            isInteracting = false
+            inputProtectionCoordinator.reset()
+            interactionController.prepareForNextProtectionActivation()
+            inputProtectionCoordinator.resetActivationProgress()
+            blackHolePrePresentationCamera = nil
+        default:
+            break
         }
     }
 

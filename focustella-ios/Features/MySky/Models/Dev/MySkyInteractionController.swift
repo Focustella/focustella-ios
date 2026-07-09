@@ -6,16 +6,8 @@ import UIKit
 
 @MainActor
 final class MySkyInteractionController {
-    private var normalInputUpdateInterval: CFTimeInterval {
-#if canImport(UIKit)
-        // Match drag sampling to the device display cadence (e.g. 120Hz ProMotion)
-        // to reduce visible micro-stutter while panning.
-        let fps = max(60, UIScreen.main.maximumFramesPerSecond)
-#else
-        let fps = 60
-#endif
-        return 1.0 / CFTimeInterval(fps)
-    }
+    // Keep interaction updates at 60fps to avoid excessive SwiftUI invalidation on high-refresh devices.
+    private let normalInputUpdateInterval: CFTimeInterval = 1.0 / 60.0
     private let pressureInputUpdateInterval: CFTimeInterval = 1.0 / 24.0
     private let stressVelocityStart: CGFloat = 1_000   // pt/s
     private let overloadTriggerDuration: CGFloat = 1.5 // seconds
@@ -51,6 +43,7 @@ final class MySkyInteractionController {
         let onInteractionBegan: () -> Void
         let onInteractionEnded: () -> Void
         let onInputPressureDetected: () -> Void
+        let onInputStressChanged: (CGFloat) -> Void
     }
 
     func dragGesture(context: Context) -> some Gesture {
@@ -85,6 +78,7 @@ final class MySkyInteractionController {
                 self.lastDragUpdateTime = 0
                 self.resetDragPressureState()
                 self.releaseInputPressureModeIfNeeded()
+                context.onInputStressChanged(0)
                 context.onInteractionEnded()
             }
     }
@@ -128,6 +122,14 @@ final class MySkyInteractionController {
                     context: context
                 )
             }
+    }
+
+    func prepareForNextProtectionActivation() {
+        pressureDetectionCooldownUntil = 0
+        lastDragUpdateTime = 0
+        lastMagnifyUpdateTime = 0
+        releaseInputPressureModeIfNeeded()
+        resetDragPressureState()
     }
 
     private func selectSkyItem(
@@ -241,12 +243,14 @@ final class MySkyInteractionController {
             resetDragPressureState()
             lastRawDragSampleTime = now
             lastRawDragTranslation = translation
+            context.onInputStressChanged(0)
             return
         }
 
         if lastRawDragSampleTime == 0 {
             lastRawDragSampleTime = now
             lastRawDragTranslation = translation
+            context.onInputStressChanged(0)
             return
         }
 
@@ -264,11 +268,15 @@ final class MySkyInteractionController {
             overloadAccumulatedDuration = max(0, overloadAccumulatedDuration - (CGFloat(dt) * overloadDecayMultiplier))
         }
 
+        let stressScore = min(max(overloadAccumulatedDuration / overloadTriggerDuration, 0), 1)
+        context.onInputStressChanged(stressScore)
+
         lastRawDragSampleTime = now
         lastRawDragTranslation = translation
 
         if overloadAccumulatedDuration >= overloadTriggerDuration {
             overloadAccumulatedDuration = CGFloat(0)
+            context.onInputStressChanged(0)
             enterInputPressureModeIfNeeded(now: now, context: context)
             return
         }
@@ -276,8 +284,9 @@ final class MySkyInteractionController {
         if isInputPressureMode {
             pressureRecoveryTask?.cancel()
             pressureRecoveryTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(pressureRecoveryDelay))
                 guard let self else { return }
+                try? await Task.sleep(for: .seconds(self.pressureRecoveryDelay))
+                guard !Task.isCancelled else { return }
                 self.releaseInputPressureModeIfNeeded()
             }
         }

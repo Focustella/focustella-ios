@@ -1,11 +1,13 @@
 import SwiftUI
 
 struct InputProtectionBannerView: View {
+    let message: String
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "hand.raised.fill")
                 .font(.system(size: 14, weight: .semibold))
-            Text("입력이 너무 빨라 잠시 쉬는 중이에요.")
+            Text(message)
                 .font(.caption.weight(.semibold))
                 .multilineTextAlignment(.leading)
         }

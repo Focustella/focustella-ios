@@ -10,6 +10,7 @@ struct MySkyBackgroundLayer: View {
     private let baseExpansion: CGFloat = 2.9
     private let panResponse: CGFloat = 0.55
     private let zoomResponse: CGFloat = 0.72
+    private let backgroundBaseScale: CGFloat = 1.22
 
     var body: some View {
         let viewportSize = CGSize(
@@ -20,7 +21,8 @@ struct MySkyBackgroundLayer: View {
             width: max(viewportSize.width * baseExpansion, viewportSize.width + 920),
             height: max(viewportSize.height * baseExpansion, viewportSize.height + 1200)
         )
-        let appliedScale = 1 + ((scale - 1) * zoomResponse)
+        let variantScale = backgroundScale(for: variant)
+        let appliedScale = (1 + ((scale - 1) * zoomResponse)) * backgroundBaseScale * variantScale
         let scaledSize = CGSize(
             width: expandedSize.width * appliedScale,
             height: expandedSize.height * appliedScale
@@ -62,6 +64,8 @@ struct MySkyBackgroundLayer: View {
             return .mySkyAurora
         case .deepSpace:
             return .mySkyDeepSpace
+        case .singularity:
+            return .mySkySingularity
         }
     }
 }
@@ -69,5 +73,14 @@ struct MySkyBackgroundLayer: View {
 private extension CGFloat {
     func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+private func backgroundScale(for variant: MySkyBackgroundVariant) -> CGFloat {
+    switch variant {
+    case .singularity:
+        return 0.78
+    default:
+        return 1.0
     }
 }

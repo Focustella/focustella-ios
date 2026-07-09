@@ -5,6 +5,7 @@ enum MySkyBackgroundVariant: String, CaseIterable, Codable {
     case legacy
     case aurora
     case deepSpace
+    case singularity
 
     var title: String {
         switch self {
@@ -16,6 +17,8 @@ enum MySkyBackgroundVariant: String, CaseIterable, Codable {
             return "오로라 하늘"
         case .deepSpace:
             return "딥 스페이스"
+        case .singularity:
+            return "싱귤래리티"
         }
     }
 }
