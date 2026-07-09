@@ -15,6 +15,7 @@ struct MySkyView: View {
     @StateObject private var inputProtectionCoordinator = MySkyInputProtectionCoordinator()
     @StateObject private var blackHoleCoordinator = MySkyBlackHoleCoordinator()
     @StateObject private var dailyRewardStore = MySkyDailyRewardStore()
+    @StateObject private var effectsCoordinator = MySkyEffectsCoordinator()
     @AppStorage("highPerformanceMode") private var highPerformanceMode: Bool = false
     @AppStorage("developerMode") private var developerMode: Bool = false
     @AppStorage("starStyle") private var starStyle: StarAppearanceStyle = .realistic
@@ -26,12 +27,11 @@ struct MySkyView: View {
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial: Bool = false
     @State private var tutorialStep: TutorialStep = .notStarted
 
-    @State private var showDailyRewardText = false
-    @State private var dailyStarRippleCenter: CGPoint?
-
     private let repository = ConstellationRepository()
     private let sessionDirector = MySkySessionDirector()
     private let interactionController = MySkyInteractionController()
+    private let renderModel = MySkyRenderModel()
+    private let tutorialCoordinator = MySkyTutorialCoordinator()
 
     @State private var cameraState: MySkyCameraState = .default
     @State private var dragStartCamera: MySkyCameraState?
@@ -56,8 +56,6 @@ struct MySkyView: View {
     @State private var showCompletionRecordButton = false
     @State private var completionFlowTask: Task<Void, Never>?
     @State private var completionEdgeOrder: [Int] = []
-    @State private var rewardSequenceTask: Task<Void, Never>?
-    @State private var dailyRewardTextTask: Task<Void, Never>?
     @State private var hasLaidOutCTA = false
     @State private var hasInitializedView = false
     @State private var blackHolePrePresentationCamera: MySkyCameraState?
@@ -71,7 +69,6 @@ struct MySkyView: View {
     private let sessionAutoZoom: CGFloat = 2.0
     private let blackHolePresentationZoom: CGFloat = 0.22
     private let blackHolePreludeDelay: TimeInterval = 1.05
-    private let tutorialGoldenStarSkyPoint = CGPoint(x: 0.5, y: 0.5)
     private let tutorialSessionZoom: CGFloat = 1.35
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -216,7 +213,7 @@ struct MySkyView: View {
                         .padding(.horizontal, 20).padding(.top, 72).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).transition(.move(edge: .top).combined(with: .opacity))
                 }
                 
-                if showDailyRewardText {
+                if effectsCoordinator.showDailyRewardText {
                     VStack {
                         Text("일일세션을 완료하여\n별 한 개를 받았어요!")
                             .font(.headline).foregroundStyle(.black).multilineTextAlignment(.center).padding(.vertical, 16).padding(.horizontal, 32).background(Color.white, in: Capsule()).shadow(color: .white.opacity(0.3), radius: 15)
@@ -282,10 +279,7 @@ struct MySkyView: View {
                 }
             }
             .onDisappear {
-                rewardSequenceTask?.cancel()
-                dailyRewardTextTask?.cancel()
-                dailyStarRippleCenter = nil
-                showDailyRewardText = false
+                effectsCoordinator.cancelDailyRewardEffects()
                 dailyRewardStore.clearSelection()
                 inputProtectionCoordinator.reset()
                 inputProtectionCoordinator.resetActivationProgress()
@@ -307,13 +301,8 @@ struct MySkyView: View {
 
                 hasInitializedView = true
                 
-                // 🔥 수정: 튜토리얼의 첫 시작점을 닉네임 묻기로 변경합니다!
-                if !hasSeenTutorial {
-                    tutorialStep = .askNickname
-                    cameraState = MySkyCameraState(centerSky: tutorialGoldenStarSkyPoint, zoom: 1.0)
-                } else {
-                    tutorialStep = .done
-                }
+                tutorialStep = tutorialCoordinator.initialStep(hasSeenTutorial: hasSeenTutorial)
+                cameraState = tutorialCoordinator.initialCamera(hasSeenTutorial: hasSeenTutorial)
 
                 showCTA = sessionStore.currentSession == nil
                 hasLaidOutCTA = true
@@ -367,12 +356,13 @@ struct MySkyView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .dailySessionCompleted)) { _ in
-                if !hasSeenTutorial && tutorialStep == .waitDaily {
-                    // 튜토리얼 중 일일 세션을 완료했다면!
-                    tutorialStep = .spawningReward
+                if let nextStep = tutorialCoordinator.stepAfterDailySessionCompleted(
+                    hasSeenTutorial: hasSeenTutorial,
+                    step: tutorialStep
+                ) {
+                    tutorialStep = nextStep
                     triggerTutorialRewardSequence(size: canvasSize)
                 } else {
-                    // 평소의 일반 일일 세션 보상
                     triggerDailyRewardSequence(size: canvasSize)
                 }
             }
@@ -382,14 +372,12 @@ struct MySkyView: View {
             }
             // 🔥 튜토리얼 강제 종료(탈옥) 방지 로직 추가!
             .onChange(of: showDailySessionSheet) { _, isShowing in
-                // 시트가 방금 닫혔고(!isShowing),
-                // 튜토리얼을 아직 안 봤고(!hasSeenTutorial),
-                // 현재 상태가 일일 세션 대기 중(.waitDaily)이라면
-                // = 완료 버튼을 안 누르고 강제로 바깥쪽을 터치해서 닫은 상황!
-                if !isShowing && !hasSeenTutorial && tutorialStep == .waitDaily {
+                if tutorialCoordinator.shouldRollbackDailySheetDismissal(
+                    isShowing: isShowing,
+                    hasSeenTutorial: hasSeenTutorial,
+                    step: tutorialStep
+                ) {
                     Self.logger.notice("tutorial escape detected while waiting daily session; rollback to suggestDaily")
-                    
-                    // 다시 "일일 세션 계획하기" 툴팁과 버튼이 보이도록 살짝 돌려놓습니다.
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                         tutorialStep = .suggestDaily
                     }
@@ -464,72 +452,50 @@ struct MySkyView: View {
         ).makeRewardPoint(xRange: xRange, yRange: yRange)
     }
 
-    private func runRewardSequence(
-        point: CGPoint,
-        size: CGSize,
-        cleanupDelay: TimeInterval,
-        onImpact: @escaping () -> Void
-    ) {
-        let zoom: CGFloat = 1.6
-        let targetCamera = cameraController(for: size).centeredCamera(forSky: point, zoom: zoom)
-
-        rewardSequenceTask?.cancel()
-        animateCamera(to: targetCamera, duration: 1.0)
-        rewardSequenceTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.1))
-            guard !Task.isCancelled else { return }
-
-            spawnEffectToken += 1
-            dailyStarRippleCenter = point
-            dailyRewardStore.append(point)
-            dailyRewardStore.clearSelection()
-
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.impactOccurred()
-            onImpact()
-
-            try? await Task.sleep(for: .seconds(cleanupDelay))
-            guard !Task.isCancelled else { return }
-
-            dailyStarRippleCenter = nil
-            animateCamera(to: .default, duration: 1.2)
-        }
-    }
-
-    private func showDailyRewardTextTemporarily(duration: TimeInterval) {
-        dailyRewardTextTask?.cancel()
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-            showDailyRewardText = true
-        }
-        dailyRewardTextTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(duration))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.5)) {
-                showDailyRewardText = false
-            }
-        }
-    }
-
     // 1. 일일 세션 완료용
     private func triggerDailyRewardSequence(size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
         let newPoint = makeRewardPoint(xRange: 0.15...0.85, yRange: 0.1...0.5)
         runRewardSequence(point: newPoint, size: size, cleanupDelay: 3.0) {
-            showDailyRewardTextTemporarily(duration: 3.0)
+            effectsCoordinator.showDailyRewardTextTemporarily(duration: 3.0)
         }
     }
 
     // 2. 튜토리얼 전용 보상 시퀀스
-        private func triggerTutorialRewardSequence(size: CGSize) {
-            guard size.width > 0, size.height > 0 else { return }
-            let newPoint = tutorialGoldenStarSkyPoint
-            runRewardSequence(point: newPoint, size: size, cleanupDelay: 2.0) {
-                // 🔥 별이 땅에 닿자마자 튜토리얼 말풍선을 다음 단계로 넘김!
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-                    tutorialStep = .dailyReward
-                }
-            }
+    private func triggerTutorialRewardSequence(size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let newPoint = tutorialCoordinator.goldenStarSkyPoint
+        runRewardSequence(point: newPoint, size: size, cleanupDelay: 2.0) {
+            tutorialCoordinator.applyDailyRewardImpact(step: $tutorialStep)
         }
+    }
+
+    private func runRewardSequence(
+        point: CGPoint,
+        size: CGSize,
+        cleanupDelay: TimeInterval,
+        onImpact: @escaping @MainActor () -> Void
+    ) {
+        let targetCamera = cameraController(for: size).centeredCamera(forSky: point, zoom: 1.6)
+        effectsCoordinator.runDailyRewardSequence(
+            point: point,
+            targetCamera: targetCamera,
+            cleanupDelay: cleanupDelay,
+            animateCamera: { targetCamera, duration in
+                animateCamera(to: targetCamera, duration: duration)
+            },
+            appendReward: { point in
+                dailyRewardStore.append(point)
+            },
+            clearSelection: {
+                dailyRewardStore.clearSelection()
+            },
+            onImpact: onImpact,
+            onCleanup: {
+                animateCamera(to: .default, duration: 1.2)
+            }
+        )
+    }
     // MARK: - 기존 로직 유지
     private func constellationById(_ id: UUID) -> Constellation? { skyState.constellation(id: id) }
 
@@ -875,29 +841,15 @@ struct MySkyView: View {
     }
 
     private func focusSessionPresentation(for constellation: Constellation) -> MySkyFocusSessionPresentation {
-        let actualDiscoveredCount: Int
-        let renderedDiscoveredCount: Int
-        if livePresentationState.constellationId == constellation.id {
-            actualDiscoveredCount = livePresentationState.actualDiscoveredCount
-            renderedDiscoveredCount = livePresentationState.renderedDiscoveredCount
-        } else if sessionStore.currentSession?.constellationId == constellation.id {
-            actualDiscoveredCount = sessionStore.currentSession?.discoveredStarCount ?? 0
-            renderedDiscoveredCount = skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0
-        } else {
-            actualDiscoveredCount = max(
-                skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0,
-                sessionStore.latestSession(constellationId: constellation.id)?.discoveredStarCount ?? 0
-            )
-            renderedDiscoveredCount = skyState.visibleDiscoveredStarCounts[constellation.id] ?? 0
-        }
-
-        return MySkyFocusSessionPresentation(
-            constellation: constellation,
-            actualDiscoveredCount: actualDiscoveredCount,
-            renderedDiscoveredCount: renderedDiscoveredCount,
-            edgeRevealState: skyState.edgeRevealStates[constellation.id] ?? MySkyEdgeRevealState(),
-            activeBirthEffect: activeStarBirthEffect?.constellationId == constellation.id ? activeStarBirthEffect : nil,
-            discoveryOrder: renderMetadataById(constellation.id)?.discoveryOrder
+        renderModel.focusSessionPresentation(
+            for: constellation,
+            livePresentationState: livePresentationState,
+            currentSession: sessionStore.currentSession,
+            latestSession: sessionStore.latestSession(constellationId: constellation.id),
+            visibleDiscoveredStarCounts: skyState.visibleDiscoveredStarCounts,
+            edgeRevealStates: skyState.edgeRevealStates,
+            activeStarBirthEffect: activeStarBirthEffect,
+            renderMetadata: renderMetadataById(constellation.id)
         )
     }
 
@@ -1026,17 +978,11 @@ struct MySkyView: View {
     }
 
     private func runningEdgeIndices(constellation: Constellation, discoveredCount: Int) -> Set<Int> {
-        guard discoveredCount > 0 else { return [] }
-        if let metadata = renderMetadataById(constellation.id) {
-            return metadata.visibleEdgeIndices(forDiscoveredCount: discoveredCount)
-        }
-        let presentation = focusSessionPresentation(for: constellation)
-        let discoveredIds = Set(presentation.stars(forDiscoveredCount: discoveredCount).map(\.id))
-        var indices: Set<Int> = []
-        for (index, edge) in constellation.edges.enumerated() {
-            if discoveredIds.contains(edge.from), discoveredIds.contains(edge.to) { indices.insert(index) }
-        }
-        return indices
+        renderModel.runningEdgeIndices(
+            constellation: constellation,
+            discoveredCount: discoveredCount,
+            renderMetadata: renderMetadataById(constellation.id)
+        )
     }
 
     private func scheduleVisibleEdgeReveal(constellationId: UUID, discoveredCount: Int, after delay: TimeInterval) {
@@ -1076,14 +1022,11 @@ struct MySkyView: View {
     }
 
     private func edgeRenderState(for constellation: Constellation) -> (visibleIndices: Set<Int>, visibilityOverrides: [Int: CGFloat]) {
-        let state = skyState.edgeRevealStates[constellation.id] ?? MySkyEdgeRevealState()
-        let committedIndices = runningEdgeIndices(constellation: constellation, discoveredCount: state.committedDiscoveredCount)
-        guard let pendingCount = state.pendingDiscoveredCount else { return (committedIndices, [:]) }
-
-        let pendingIndices = runningEdgeIndices(constellation: constellation, discoveredCount: pendingCount).subtracting(committedIndices)
-        var visibilityOverrides = Dictionary(uniqueKeysWithValues: committedIndices.map { ($0, CGFloat(1)) })
-        for index in pendingIndices { visibilityOverrides[index] = state.progress }
-        return (committedIndices.union(pendingIndices), visibilityOverrides)
+        renderModel.edgeRenderState(
+            for: constellation,
+            edgeRevealStates: skyState.edgeRevealStates,
+            renderMetadata: renderMetadataById(constellation.id)
+        )
     }
 
     private var tutorialWarpCanAdvance: Bool {
@@ -1115,26 +1058,12 @@ struct MySkyView: View {
 
     @ViewBuilder
     private func settledConstellationLayer(mapper: MySkyCoordinateMapper, animationTime: TimeInterval?) -> some View {
-        let completionConstellationId = completionConstellation?.id
-        let liveConstellationId = livePresentationState.constellationId
-
-        let settledItems: [SettledConstellationsCanvas.Item] = sessionStore.completedSessions.compactMap { session in
-            guard completionConstellationId != session.constellationId,
-                  liveConstellationId != session.constellationId,
-                  let metadata = renderMetadataById(session.constellationId) else {
-                return nil
-            }
-
-            let constellation = metadata.constellation
-            let visibleCount = skyState.visibleDiscoveredStarCounts[session.constellationId] ?? constellation.starCount
-            let edgeState = edgeRenderState(for: constellation)
-            return SettledConstellationsCanvas.Item(
-                metadata: metadata,
-                discoveredStarCount: visibleCount,
-                visibleEdgeIndices: edgeState.visibleIndices,
-                edgeVisibilityOverrides: edgeState.visibilityOverrides
-            )
-        }
+        let settledItems = renderModel.settledItems(
+            completedSessions: sessionStore.completedSessions,
+            skyState: skyState,
+            completionConstellationId: completionConstellation?.id,
+            liveConstellationId: livePresentationState.constellationId
+        )
 
         if !settledItems.isEmpty {
             SettledConstellationsCanvas(
@@ -1214,12 +1143,12 @@ struct MySkyView: View {
     @ViewBuilder
     private func interactiveEffectLayer(size: CGSize) -> some View {
         let mapper = coordinateMapper(for: size)
-        if let rewardCenter = dailyStarRippleCenter {
+        if let rewardCenter = effectsCoordinator.dailyStarRippleCenter {
             RippleEffectView(
                 position: mapper.screenPoint(fromSky: rewardCenter, camera: cameraState),
                 reduceMotion: accessibility.isReduceMotionEnabled
             )
-            .id("daily-ripple-\(spawnEffectToken)")
+            .id("daily-ripple-\(effectsCoordinator.dailyRewardEffectToken)")
             .allowsHitTesting(false)
         }
     }
