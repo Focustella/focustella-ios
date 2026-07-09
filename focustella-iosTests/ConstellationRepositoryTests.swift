@@ -3,18 +3,19 @@ import CoreGraphics
 @testable import focustella_ios
 
 final class ConstellationRepositoryTests: XCTestCase {
-    func testPlaceRemoteConstellationReturnsNilWhenOccupiedSkyAlreadyBlocksPlacement() {
+    func testPlaceRemoteConstellationAvoidsOccupiedSkyWhenCenterIsBlocked() throws {
         let repository = ConstellationRepository(service: MockConstellationService())
         let occupied = blockingConstellation()
 
-        let placed = repository.placeRemoteConstellation(
+        let result = repository.placeRemoteConstellation(
             template: compactTemplate(id: 101),
             placementKey: "session-101",
             occupied: [occupied],
             randomSeed: 42
         )
 
-        XCTAssertNil(placed)
+        let placed = try XCTUnwrap(result)
+        XCTAssertFalse(polygonsOverlap(hull(for: occupied), hull(for: placed)))
     }
 
     func testPlaceRemoteConstellationSpreadsRepeatedPlacementsWithoutOverlap() {
